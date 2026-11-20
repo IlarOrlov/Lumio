@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0c10">
+  <meta name="referrer" content="no-referrer">
+  <title>Sign in · Lumio</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/login.js" defer></script>
+</head>
+<body class="login-page">
+  <form class="login-card" id="login" autocomplete="on">
+    <img src="/icon.svg" alt="" width="56" height="56">
+    <h1>Lumio</h1>
+    <p class="muted">Your home cinema</p>
+    <label>Password
+      <input type="password" name="password" id="password" required autocomplete="current-password" maxlength="256" autofocus>
+    </label>
+    <label>Name this device
+      <input type="text" name="device" id="device" required maxlength="40" placeholder="Living room TV">
+    </label>
+    <p class="hint">Each device keeps its own watch history and resume points.</p>
+    <button type="submit" class="btn primary">Sign in</button>
+    <p class="error" id="error" role="alert"></p>
+  </form>
+</body>
+</html>

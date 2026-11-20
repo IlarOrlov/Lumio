@@ -1,0 +1,10 @@
+# Secrets and local state - never commit these
+config/lumio.json
+config/tls/
+data/
+*.pem
+*.key
+
+node_modules/
+.DS_Store
+*.log

@@ -1,0 +1,52 @@
+# Lumio systemd unit (system-wide, runs as an unprivileged user).
+# Install:
+#   sudo cp deploy/lumio.service /etc/systemd/system/lumio.service
+#   sudo systemctl edit --full lumio   # set User, WorkingDirectory, ReadOnlyPaths, ReadWritePaths
+#   sudo systemctl daemon-reload && sudo systemctl enable --now lumio
+[Unit]
+Description=Lumio home streaming server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=CHANGE_ME
+Group=CHANGE_ME
+WorkingDirectory=/home/CHANGE_ME/Lumio
+ExecStart=/usr/bin/env node --disable-warning=ExperimentalWarning src/server.js
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+# If node lives in ~/.local/bin, put the full path in ExecStart instead of /usr/bin/env node.
+
+# ---- Sandbox ----
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# Lumio may write only its data dir; media is read-only.
+ReadWritePaths=/home/CHANGE_ME/Lumio/data
+ReadOnlyPaths=/home/CHANGE_ME/Videos
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @raw-io @reboot @swap
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

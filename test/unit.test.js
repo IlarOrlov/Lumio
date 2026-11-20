@@ -1,0 +1,167 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { hashPassword, verifyPassword, LoginLimiter, Sessions } = require('../src/auth');
+const { createNetworkGuard, createHostGuard } = require('../src/netguard');
+const { parseName, scanLibrary, buildShows, nextEpisode } = require('../src/library');
+const { Progress, isCompleted } = require('../src/progress');
+const { playbackPlan, parseCaps } = require('../src/media');
+const { openDb } = require('../src/db');
+
+test('password hashing round-trips and rejects wrong passwords', async () => {
+  const h = await hashPassword('correct horse battery');
+  assert.match(h, /^scrypt\$32768\$8\$1\$/);
+  assert.equal(await verifyPassword('correct horse battery', h), true);
+  assert.equal(await verifyPassword('correct horse batterz', h), false);
+  assert.equal(await verifyPassword('x', 'garbage'), false);
+});
+
+test('login limiter locks globally and escalates', () => {
+  let t = 0;
+  const l = new LoginLimiter({ maxPerWindow: 3, baseLockMs: 1000, now: () => t });
+  l.recordFailure(); l.recordFailure();
+  assert.equal(l.retryAfterMs(), 0);
+  l.recordFailure();
+  assert.equal(l.retryAfterMs(), 1000);
+  t += 1000;
+  l.recordFailure(); l.recordFailure(); l.recordFailure();
+  assert.equal(l.retryAfterMs(), 2000, 'second lockout doubles');
+  l.recordSuccess();
+  assert.equal(l.retryAfterMs(), 0);
+});
+
+test('sessions: create, lookup, expire, revoke', () => {
+  let t = 1_000_000;
+  const db = openDb(':memory:');
+  const s = new Sessions(db, { sessionDays: 1, now: () => t });
+  const { token, deviceId } = s.createDeviceSession('TV', 'ua');
+  const found = s.lookup(token);
+  assert.equal(found.deviceId, deviceId);
+  assert.equal(found.deviceName, 'TV');
+  assert.equal(s.lookup(token + 'x'), null);
+  assert.equal(s.lookup('short'), null);
+  // token itself is never stored
+  assert.equal(db.prepare('SELECT COUNT(*) c FROM sessions WHERE token_hash = ?').get(token).c, 0);
+  t += 2 * 86_400_000;
+  assert.equal(s.lookup(token), null, 'expired');
+  const b = s.createDeviceSession('Phone', '');
+  assert.ok(s.revokeDevice(b.deviceId));
+  assert.equal(s.lookup(b.token), null, 'revoked');
+});
+
+test('network guard allows only private ranges', () => {
+  const ok = createNetworkGuard(['127.0.0.0/8', '192.168.0.0/16', '10.0.0.0/8', '::1/128', 'fc00::/7']);
+  assert.ok(ok('192.168.204.2'));
+  assert.ok(ok('::ffff:192.168.1.10'));
+  assert.ok(ok('::1'));
+  assert.ok(!ok('8.8.8.8'));
+  assert.ok(!ok('::ffff:8.8.8.8'));
+  assert.ok(!ok('2001:db8::1'));
+  assert.ok(!ok(undefined));
+});
+
+test('host guard blocks DNS-rebinding hostnames', () => {
+  const ok = createHostGuard(['lumio.home']);
+  assert.ok(ok('192.168.1.20:8443'));
+  assert.ok(ok('localhost:8443'));
+  assert.ok(ok('[::1]:8443'));
+  assert.ok(ok('lumio.home'));
+  assert.ok(!ok('evil.example.com'));
+  assert.ok(!ok(undefined));
+});
+
+test('filename parsing: movies and episodes', () => {
+  assert.deepEqual(parseName('/m/Inception (2010) 1080p BluRay x264.mkv'), { kind: 'movie', title: 'Inception', year: 2010 });
+  assert.deepEqual(parseName('/m/The.Matrix.1999.2160p.mkv'), { kind: 'movie', title: 'The Matrix', year: 1999 });
+  assert.deepEqual(parseName('/m/Remux.Film.2019.1080p.BluRay.x264.mkv'), { kind: 'movie', title: 'Remux Film', year: 2019 });
+  assert.equal(parseName('/m/Arrival.1080p.WEB-DL.mkv').title, 'Arrival');
+  const e = parseName('/tv/Breaking.Bad.S02E05.Breakage.720p.mkv');
+  assert.equal(e.kind, 'episode'); assert.equal(e.show, 'Breaking Bad');
+  assert.equal(e.season, 2); assert.equal(e.episode, 5); assert.equal(e.title, 'Breakage');
+  const f = parseName('/tv/Dark/Season 1/S01E03.mkv');
+  assert.equal(f.show, 'Dark'); assert.equal(f.episode, 3);
+  assert.equal(parseName('/tv/Show 3x07.mp4').season, 3);
+});
+
+function makeLibrary() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-lib-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-out-'));
+  fs.mkdirSync(path.join(dir, 'Show', 'Season 1'), { recursive: true });
+  for (const f of ['Show/Season 1/Show S01E01.mkv', 'Show/Season 1/Show S01E02.mkv', 'Show/Season 1/Show S01E02.en.srt', 'Film (2020).mp4', 'notes.txt', '.hidden.mkv']) {
+    fs.writeFileSync(path.join(dir, f), 'x');
+  }
+  fs.writeFileSync(path.join(outside, 'secret.mkv'), 'x');
+  fs.symlinkSync(path.join(outside, 'secret.mkv'), path.join(dir, 'escape.mkv'));
+  return { dir, outside };
+}
+
+test('library scan: groups shows, finds sidecar subs, refuses escaping symlinks', () => {
+  const { dir } = makeLibrary();
+  const items = scanLibrary([dir]);
+  const names = [...items.values()].map((i) => path.basename(i.path)).sort();
+  assert.deepEqual(names, ['Film (2020).mp4', 'Show S01E01.mkv', 'Show S01E02.mkv']);
+  const shows = buildShows(items);
+  assert.equal(shows.size, 1);
+  const [show] = shows.values();
+  assert.equal(show.episodes.length, 2);
+  assert.equal(show.episodes[1].sidecarSubs[0].label, 'en');
+  assert.equal(nextEpisode(shows, show.episodes[0]).id, show.episodes[1].id);
+  assert.equal(nextEpisode(shows, show.episodes[1]), null);
+});
+
+test('completion threshold', () => {
+  assert.ok(isCompleted(93, 100));
+  assert.ok(isCompleted(2700 - 80, 2700));
+  assert.ok(!isCompleted(50, 100));
+  assert.ok(!isCompleted(10, 0));
+});
+
+test('progress: continue watching is per device, and offers the next episode', () => {
+  const { dir } = makeLibrary();
+  let t = 1000;
+  const db = openDb(':memory:');
+  const s = new Sessions(db);
+  const a = s.createDeviceSession('A', '').deviceId;
+  const b = s.createDeviceSession('B', '').deviceId;
+  const items = scanLibrary([dir]);
+  const shows = buildShows(items);
+  const catalog = { get: (id) => items.get(id), next: (it) => nextEpisode(shows, it) };
+  const [show] = shows.values();
+  const [e1, e2] = show.episodes;
+  const film = [...items.values()].find((i) => i.kind === 'movie');
+  const p = new Progress(db, { now: () => t++ });
+
+  p.save(a, film.id, 600, 6000);
+  p.save(a, e1.id, 300, 1500);
+  let cw = p.continueWatching(a, catalog);
+  assert.deepEqual(cw.map((c) => c.id), [e1.id, film.id]);
+  assert.equal(p.continueWatching(b, catalog).length, 0, 'device B sees nothing');
+
+  p.save(a, e1.id, 1490, 1500); // finished episode 1
+  cw = p.continueWatching(a, catalog);
+  assert.equal(cw[0].id, e2.id);
+  assert.equal(cw[0].upNext, true);
+  assert.equal(cw.filter((c) => c.id === e1.id).length, 0);
+
+  p.save(a, film.id, 5900, 6000);
+  assert.equal(p.continueWatching(a, catalog).some((c) => c.id === film.id), false, 'finished film leaves the row');
+});
+
+test('playback plan picks direct / remux / transcode, honouring device codecs', () => {
+  const mp4 = { ext: '.mp4' };
+  const mkv = { ext: '.mkv' };
+  const info = (codec, audio = 'aac', pixFmt = 'yuv420p', profile = 'High') => ({
+    video: { codec, pixFmt, profile }, audio: [{ codec: audio, channels: 2 }], subtitles: [],
+  });
+  assert.equal(playbackPlan(mp4, info('h264')).mode, 'direct');
+  assert.equal(playbackPlan(mkv, info('h264')).mode, 'remux');
+  assert.equal(playbackPlan(mp4, info('h264', 'ac3')).mode, 'remux');
+  assert.equal(playbackPlan(mkv, info('hevc')).mode, 'transcode');
+  assert.equal(playbackPlan(mkv, info('hevc'), 0, parseCaps('hevc')).mode, 'remux');
+  assert.equal(playbackPlan(mp4, info('av1', 'opus', 'yuv420p10le'), 0, parseCaps('av1')).mode, 'direct');
+  assert.equal(playbackPlan(mp4, info('h264', 'aac', 'yuv420p10le', 'High 10')).mode, 'transcode');
+  assert.deepEqual([...parseCaps('av1,evil,hevc')], ['av1', 'hevc']);
+});

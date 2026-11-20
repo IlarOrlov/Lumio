@@ -1,0 +1,18 @@
+{
+  "name": "lumio",
+  "version": "0.1.0",
+  "description": "Self-hosted, security-first home streaming server for your own movie and series files, with per-device resume.",
+  "license": "MIT",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.js",
+    "compact": "node --disable-warning=ExperimentalWarning scripts/compact.js",
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  }
+}

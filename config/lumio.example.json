@@ -1,0 +1,14 @@
+{
+  "host": "0.0.0.0",
+  "port": 8443,
+  "https": true,
+  "tlsCert": "config/tls/cert.pem",
+  "tlsKey": "config/tls/key.pem",
+  "mediaDirs": ["/home/you/Videos"],
+  "passwordHash": "run `npm run setup` to generate this",
+  "allowedNetworks": ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10"],
+  "allowedHosts": [],
+  "sessionDays": 180,
+  "maxTranscodes": 3,
+  "rescanMinutes": 15
+}
