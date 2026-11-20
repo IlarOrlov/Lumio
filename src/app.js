@@ -180,6 +180,12 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console })
     const m = req.method;
 
     if (m === 'POST' && p === '/api/login') return login(req, res);
+    if (m === 'GET' && p === '/lumio.crt' && cfg.https) {
+      // Public certificate (not secret) so phones/TVs can install it as trusted.
+      const pem = fs.readFileSync(cfg.tlsCert);
+      res.writeHead(200, { 'Content-Type': 'application/x-x509-ca-cert', 'Content-Disposition': 'attachment; filename="lumio.crt"', 'Content-Length': pem.length });
+      return res.end(pem);
+    }
     if ((m === 'GET' || m === 'HEAD') && statics.has(p === '/' ? '/index.html' : p === '/login' ? '/login.html' : p)) {
       const f = statics.get(p === '/' ? '/index.html' : p === '/login' ? '/login.html' : p);
       res.writeHead(200, { 'Content-Type': f.type, 'Content-Length': f.body.length, 'Cache-Control': 'no-cache' });
@@ -279,7 +285,10 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console })
     return sendError(res, 404, 'Not found');
   }
 
-  return async function handler(req, res) {
+  handler.active = active;
+  return handler;
+
+  async function handler(req, res) {
     securityHeaders(res, cfg);
     try {
       if (!isAllowedIp(req.socket.remoteAddress)) {
@@ -300,7 +309,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console })
       log.error?.('[lumio] request error:', e && e.message);
       return sendError(res, 500, 'Internal error');
     }
-  };
+  }
 }
 
 module.exports = { createApp };

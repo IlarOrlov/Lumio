@@ -10,8 +10,6 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "setup": "node scripts/setup.js",
-    "compact": "node --disable-warning=ExperimentalWarning scripts/compact.js",
     "start": "node --disable-warning=ExperimentalWarning src/server.js",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
   }

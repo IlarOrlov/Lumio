@@ -1,0 +1,190 @@
+'use strict';
+/*
+ * Library compaction: re-encode to AV1 video + Opus audio in MP4 (direct-
+ * playable on modern devices, ~40-60% smaller than H.264). Driven from the
+ * admin console. Every file is encoded to a hidden temp file, verified, and
+ * only then moved into place; originals are replaced only in "replace" mode.
+ */
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const media = require('./media');
+const { mediaId } = require('./library');
+
+const MIN_SIZE = 50 * 1024 * 1024;
+const MIN_BPP = 0.06;
+
+/** Opus target: transparent rates, but never above ~75% of the source track. */
+function opusKbps(track) {
+  const ch = Math.min((track && track.channels) || 2, 8);
+  const ideal = ch > 2 ? ch * 48 : 112;
+  const src = track && track.bitRate ? Math.round((track.bitRate / 1000) * 0.75) : ideal;
+  return Math.max(ch > 2 ? 32 * ch : 48, Math.min(ideal, src));
+}
+
+class Compactor {
+  constructor({ db, catalog, log }) {
+    this.db = db;
+    this.catalog = catalog;
+    this.log = log;
+    this.reset();
+  }
+
+  reset() {
+    this.state = { phase: 'idle', candidates: [], alreadyCompact: { count: 0, bytes: 0 }, current: null, results: [], savedBytes: 0, error: null };
+    this.child = null;
+    this.cancelled = false;
+  }
+
+  status() { return this.state; }
+
+  async analyze(minSize = MIN_SIZE) {
+    if (['analyzing', 'encoding'].includes(this.state.phase)) throw new Error('Already running');
+    this.reset();
+    this.state.phase = 'analyzing';
+    const out = [];
+    const skipped = { count: 0, bytes: 0 };
+    this.state.alreadyCompact = skipped;
+    for (const it of this.catalog().items.values()) {
+      if (it.size < minSize) continue;
+      let info;
+      try { info = await this.catalog().probe(it); } catch { continue; }
+      if (!info.video || info.video.codec === 'av1') continue;
+      // Bits per pixel per frame of the video track. Below ~0.06 the file is
+      // already heavily compressed: AV1 saves little (measured: -8%..+11% on
+      // 0.05 bpp SD sources) and every re-encode costs quality.
+      const audioBps = info.audio.reduce((n, a) => n + (a.bitRate || 128000), 0);
+      const videoBps = Math.max(0, (it.size * 8) / Math.max(1, info.duration) - audioBps);
+      const bpp = videoBps / Math.max(1, (info.video.width || 1) * (info.video.height || 1) * 24);
+      if (bpp < MIN_BPP) {
+        skipped.count += 1;
+        skipped.bytes += it.size;
+        continue;
+      }
+      out.push({
+        id: it.id, name: path.basename(it.path), size: it.size, codec: info.video.codec,
+        height: info.video.height, duration: info.duration,
+        audioTracks: info.audio.length, imageSubs: info.subtitles.filter((s) => !s.text).length,
+      });
+    }
+    out.sort((a, b) => b.size - a.size);
+    this.state.candidates = out;
+    this.state.phase = 'ready';
+    return out;
+  }
+
+  cancel() {
+    this.cancelled = true;
+    if (this.child) this.child.kill('SIGKILL');
+  }
+
+  /** opts: { ids, crf, preset, audioLangs: [], mode: 'replace'|'copy', outDir } */
+  async run(opts) {
+    if (this.state.phase === 'encoding') throw new Error('Already running');
+    const chosen = this.state.candidates.filter((c) => opts.ids.includes(c.id));
+    if (!chosen.length) throw new Error('Nothing selected');
+    if (opts.mode === 'copy') {
+      if (!opts.outDir || !fs.existsSync(opts.outDir)) throw new Error('Choose an existing output folder');
+    }
+    this.state.phase = 'encoding';
+    this.state.results = [];
+    this.state.savedBytes = 0;
+    this.cancelled = false;
+
+    for (const [n, c] of chosen.entries()) {
+      if (this.cancelled) break;
+      const it = this.catalog().get(c.id);
+      if (!it) continue;
+      this.state.current = { name: c.name, index: n + 1, total: chosen.length, percent: 0, speed: '' };
+      const dir = path.dirname(it.path);
+      const stem = path.basename(it.path, it.ext);
+      const tmp = path.join(dir, `.${stem}.lumio-tmp.mp4`);
+      try {
+        const info = await this.catalog().probe(it);
+        await this.encode(it.path, tmp, info, opts);
+        const out = await media.probe(tmp);
+        const size = fs.statSync(tmp).size;
+        if (Math.abs(out.duration - info.duration) > 2) throw new Error('Length check failed; original kept');
+        if (size >= it.size) throw new Error('Result was not smaller; original kept');
+        if (opts.mode === 'replace') {
+          const finalPath = path.join(dir, `${stem}.mp4`);
+          fs.renameSync(tmp, finalPath);
+          if (finalPath !== it.path) {
+            fs.unlinkSync(it.path);
+            this.db.prepare('UPDATE OR IGNORE progress SET media_id = ? WHERE media_id = ?').run(mediaId(finalPath), it.id);
+          }
+        } else {
+          const root = this.catalog().mediaDirs.find((d) => it.path.startsWith(d + path.sep)) || dir;
+          const target = path.join(opts.outDir, path.relative(root, dir));
+          fs.mkdirSync(target, { recursive: true });
+          fs.copyFileSync(tmp, path.join(target, `${stem}.mp4`));
+          fs.unlinkSync(tmp);
+        }
+        this.state.savedBytes += it.size - size;
+        this.state.results.push({ name: c.name, ok: true, before: it.size, after: size });
+        this.log.info(`compacted ${c.name}: ${(it.size / 1e9).toFixed(2)} GB -> ${(size / 1e9).toFixed(2)} GB`);
+      } catch (e) {
+        try { fs.unlinkSync(tmp); } catch { /* nothing to clean */ }
+        const msg = this.cancelled ? 'Cancelled' : e.message;
+        this.state.results.push({ name: c.name, ok: false, message: msg });
+        if (!this.cancelled) this.log.warn(`compact failed for ${c.name}: ${msg}`);
+      }
+    }
+    this.state.current = null;
+    this.state.phase = 'done';
+    this.catalog().rescan();
+  }
+
+  encode(src, dst, info, opts) {
+    const langs = (opts.audioLangs || []).map((s) => String(s).toLowerCase());
+    const audio = info.audio.filter((a) => !langs.length || !a.language || langs.includes(a.language.toLowerCase())).map((a) => a.index);
+    if (!audio.length && info.audio.length) audio.push(0);
+    const textSubs = info.subtitles.filter((s) => s.text).map((s) => s.index);
+    const crf = Math.min(45, Math.max(18, Math.round(Number(opts.crf) || 30)));
+    const preset = Math.min(12, Math.max(2, Math.round(Number(opts.preset) || 6)));
+
+    const a = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-nostats', '-progress', 'pipe:1',
+      ...media.SAFE_INPUT, '-i', media.asInput(src), '-map', '0:v:0'];
+    for (const i of audio) a.push('-map', `0:a:${i}`);
+    for (const i of textSubs) a.push('-map', `0:s:${i}`);
+    a.push('-c:v', 'libsvtav1', '-crf', String(crf), '-preset', String(preset),
+      '-pix_fmt', 'yuv420p10le', '-svtav1-params', 'tune=0:film-grain=8', '-g', '240');
+    if (audio.length) {
+      a.push('-c:a', 'libopus', '-vbr', 'on', '-af', 'aformat=channel_layouts=7.1|5.1|stereo|mono');
+      audio.forEach((idx, n) => {
+        a.push(`-b:a:${n}`, `${opusKbps(info.audio[idx])}k`);
+      });
+    }
+    if (textSubs.length) a.push('-c:s', 'mov_text');
+    a.push('-map_metadata', '0', '-movflags', '+faststart', '-y', `file:${dst}`);
+
+    return new Promise((resolve, reject) => {
+      const child = spawn('ffmpeg', a, { stdio: ['ignore', 'pipe', 'pipe'] });
+      this.child = child;
+      let err = '';
+      let buf = '';
+      child.stdout.on('data', (d) => {
+        buf += d;
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          const [k, v] = line.split('=');
+          if (k === 'out_time_us' && info.duration > 0) {
+            this.state.current.percent = Math.min(100, (Number(v) / 1e6 / info.duration) * 100);
+          } else if (k === 'speed') {
+            this.state.current.speed = v.trim();
+          }
+        }
+      });
+      child.stderr.on('data', (d) => { if (err.length < 2000) err += d; });
+      child.on('error', reject);
+      child.on('close', (code) => {
+        this.child = null;
+        if (code === 0) resolve();
+        else reject(new Error(err.trim().split('\n').pop() || `ffmpeg exited ${code}`));
+      });
+    });
+  }
+}
+
+module.exports = { Compactor, MIN_SIZE, opusKbps };

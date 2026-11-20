@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -8,7 +9,9 @@ const CONFIG_PATH = process.env.LUMIO_CONFIG || path.join(ROOT, 'config', 'lumio
 const DEFAULTS = {
   host: '0.0.0.0',
   port: 8443,
+  adminPort: 8442,
   https: true,
+  publicHost: '',
   tlsCert: 'config/tls/cert.pem',
   tlsKey: 'config/tls/key.pem',
   mediaDirs: [],
@@ -24,36 +27,64 @@ const DEFAULTS = {
   dataDir: 'data',
 };
 
+const FORBIDDEN_MEDIA = ['/', '/etc', '/proc', '/sys', '/dev', '/boot', '/root', '/bin', '/sbin', '/lib', '/usr', '/var', '/run'];
+
 function resolveFromRoot(p) {
   return path.isAbsolute(p) ? p : path.join(ROOT, p);
 }
 
-function loadConfig(file = CONFIG_PATH) {
-  if (!fs.existsSync(file)) {
-    throw new Error(`Config not found at ${file}. Run "npm run setup" first.`);
-  }
-  const st = fs.statSync(file);
-  if (process.platform !== 'win32' && (st.mode & 0o077) !== 0) {
-    console.warn(`[lumio] warning: ${file} is readable by other users; run: chmod 600 ${file}`);
-  }
-  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const cfg = { ...DEFAULTS, ...raw };
+/** Raw config as stored on disk (relative paths kept), or null if not set up yet. */
+function readRaw(file = CONFIG_PATH) {
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
 
-  if (!/^scrypt\$/.test(cfg.passwordHash)) {
-    throw new Error('Config has no valid passwordHash. Run "npm run setup".');
+/** Atomic, owner-only write of the raw config. */
+function writeRaw(obj, file = CONFIG_PATH) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+  fs.renameSync(tmp, file);
+  fs.chmodSync(file, 0o600);
+}
+
+function isValidHostName(h) {
+  return net.isIP(h) !== 0 || /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(h);
+}
+
+function validateMediaDir(d) {
+  if (typeof d !== 'string' || !d.trim()) throw new Error('Empty media folder');
+  let real;
+  try { real = fs.realpathSync(path.resolve(d)); } catch { throw new Error(`Folder not found: ${d}`); }
+  if (!fs.statSync(real).isDirectory()) throw new Error(`Not a folder: ${d}`);
+  if (FORBIDDEN_MEDIA.includes(real) || /^\/(proc|sys|dev|etc|boot)(\/|$)/.test(real)) {
+    throw new Error(`System folders can't be used as media folders: ${real}`);
   }
-  if (!Array.isArray(cfg.mediaDirs) || cfg.mediaDirs.length === 0) {
-    throw new Error('Config needs at least one entry in mediaDirs.');
-  }
-  if (!Number.isInteger(cfg.port) || cfg.port < 1 || cfg.port > 65535) {
-    throw new Error('Config port must be an integer between 1 and 65535.');
-  }
-  cfg.mediaDirs = cfg.mediaDirs.map((d) => fs.realpathSync(path.resolve(d)));
+  fs.accessSync(real, fs.constants.R_OK | fs.constants.X_OK);
+  return real;
+}
+
+/** Full, validated runtime config. Throws a readable message when unusable. */
+function loadConfig(file = CONFIG_PATH) {
+  const raw = readRaw(file);
+  if (!raw) throw new Error('Lumio is not set up yet. Open the admin console to finish setup.');
+  const cfg = { ...DEFAULTS, ...raw };
+  if (!/^scrypt\$/.test(cfg.passwordHash)) throw new Error('No household password set.');
+  if (!Array.isArray(cfg.mediaDirs) || cfg.mediaDirs.length === 0) throw new Error('Add at least one media folder.');
+  if (!Number.isInteger(cfg.port) || cfg.port < 1024 || cfg.port > 65535) throw new Error('Port must be between 1024 and 65535.');
+  cfg.mediaDirs = cfg.mediaDirs.map(validateMediaDir);
   cfg.dataDir = resolveFromRoot(cfg.dataDir);
   cfg.tlsCert = resolveFromRoot(cfg.tlsCert);
   cfg.tlsKey = resolveFromRoot(cfg.tlsKey);
   cfg.allowedHosts = cfg.allowedHosts.map((h) => String(h).toLowerCase());
+  if (cfg.publicHost && net.isIP(cfg.publicHost) === 0) cfg.allowedHosts.push(cfg.publicHost.toLowerCase());
+  if (cfg.https && (!fs.existsSync(cfg.tlsCert) || !fs.existsSync(cfg.tlsKey))) {
+    throw new Error('HTTPS is on but no certificate exists yet. Generate one in Network & Security.');
+  }
   return cfg;
 }
 
-module.exports = { loadConfig, CONFIG_PATH, ROOT, DEFAULTS };
+module.exports = {
+  loadConfig, readRaw, writeRaw, validateMediaDir, isValidHostName, resolveFromRoot,
+  CONFIG_PATH, ROOT, DEFAULTS,
+};

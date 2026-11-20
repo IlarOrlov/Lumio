@@ -77,10 +77,42 @@ This document records the concepts and decisions behind it.
 | `src/media.js` | ffprobe/ffmpeg wrappers, playback planning, thumbnails, subtitles |
 | `src/http-util.js` | Security headers, cookies, bounded JSON bodies, static whitelist, range serving |
 | `public/` | Framework-free web client (CSP-compatible, no inline script) |
-| `scripts/setup.js` | Interactive config, password hash, TLS certificate |
-| `scripts/compact.js` | Optional AV1 library compaction |
+| `src/runtime.js` | Owns DB + streaming listener; start/stop/reconfigure without a process restart |
+| `src/admin.js` | Admin console API (loopback only): wizard, config, devices, cert, autostart, compaction, logs |
+| `src/service.js` | `systemd --user` autostart / linger / quit |
+| `src/tls.js` | Self-signed certificate generation (openssl) and inspection (`X509Certificate`) |
+| `src/compact.js` | AV1 compaction job with progress and verification |
+| `src/log.js` | Logger + in-memory ring buffer for the console's Logs page |
+| `admin/` | Admin console UI (CSP-compatible, no inline script) |
+| `launcher/` | `install.sh` (desktop icon + menu entry), `lumio.sh` (start service, open console) |
 
 ---
+
+## 2a. Admin console & launcher (no terminal)
+
+Everything is configured from a browser UI. Nothing needs the command line.
+
+```
+Desktop icon "Lumio" ─▶ launcher/lumio.sh
+                          ├─ writes ~/.config/systemd/user/lumio.service (absolute node path, sandbox options)
+                          ├─ systemctl --user start lumio        (no root, runs in background)
+                          ├─ waits for data/admin.token (fresh 256-bit key per start, mode 600)
+                          └─ xdg-open http://127.0.0.1:8442/#key=<token>
+Browser ─▶ admin console (loopback only) ─ exchanges key for a session cookie ─ strips key from URL
+```
+
+| Page | What it does |
+|---|---|
+| **Setup wizard** (first run) | Password → media folders (folder browser) → Windows host IP + port, then generates the certificate and starts streaming |
+| **Overview** | Address to open on devices, streaming status, start/stop/restart, library stats, live conversions, *start automatically* toggle (systemd user unit + linger), quit |
+| **Library** | Add/remove media folders via folder picker, rescan, list of series and movies, naming guide |
+| **Devices** | Every signed-in device with last activity and watch history; rename / remove |
+| **Network & Security** | Host IP, port, HTTPS, certificate (SANs, expiry, fingerprint, renew, download), household password (+ sign out everywhere), allowed networks / hostnames, session length, transcode limit, rescan interval; VMware NAT guide filled in with the real addresses |
+| **Storage** | Analyze → choose files → AV1 compaction with live progress, speed, cancel and per-file results |
+| **Logs** | Live tail of the server log |
+
+Settings apply immediately: `Runtime` restarts the streaming listener in-process. Device sessions
+and the database are untouched, so phones stay signed in.
 
 ## 3. Per-device watch tracking
 
@@ -97,7 +129,7 @@ This document records the concepts and decisions behind it.
 - **Resume** is automatic: opening a title continues from the saved position.
 - **History** page: everything this device has watched, with mark watched/unwatched.
 - Revoking a device in Settings signs it out everywhere and deletes its history.
-- `media_id` is a hash of the file path. `npm run compact` migrates progress when it
+- `media_id` is a hash of the file path. Storage compaction migrates progress when it
   renames `.mkv` → `.mp4`.
 
 ---
@@ -145,30 +177,37 @@ can be made.
 - **Probe cache** keyed by size and mtime, so files are probed once, not on every start.
 - **Thumbnails** are ~30 KB each and generated lazily, only when a card is shown.
 
-### 5.2 Making the library itself small — `npm run compact`
+### 5.2 Making the library itself small — admin console → Storage
 
-The biggest saving is the codec. `scripts/compact.js` re-encodes the library to:
+The biggest saving is the codec. The Storage page (`src/compact.js`) re-encodes selected files to:
 
 | Choice | Why |
 |---|---|
 | **AV1 video (SVT-AV1)**, CRF 30, preset 6, 10-bit, film-grain synthesis | ~40–60 % smaller than H.264 and ~20–30 % smaller than HEVC at similar quality. Royalty-free, decoded in hardware by most phones, TVs and GPUs since ~2020, and in software by every current browser. 10-bit avoids banding and costs no extra space. Grain synthesis stops noisy film grain wasting bits. |
-| **Opus audio** (128 kb/s stereo, 48 kb/s per channel for 5.1/7.1) | Transparent at roughly half the bitrate of AAC/AC3, and supported by every modern browser. DTS/TrueHD tracks are often 1.5–4 GB alone. |
+| **Opus audio** (≤ 112 kb/s stereo, 48 kb/s per channel for 5.1/7.1, never above 75 % of the source track) | Transparent at roughly half the bitrate of AAC/AC3, and supported by every modern browser. DTS/TrueHD tracks are often 1.5–4 GB alone. |
 | **MP4 container with `+faststart`** | Direct-playable with HTTP Range, so the server does no work at playback. |
 | **Text subtitles → mov_text** | Kept inside the file, and still served to the player as WebVTT. |
-| **`--audio-langs eng,heb`** | Drops dub tracks you never use. Often 0.5–1 GB per film. |
-| **Skip** files already AV1 or under 200 MB | Nothing to gain. |
+| **"Keep only these audio languages"** (e.g. `rus,eng`) | Drops dub tracks you never use. Often 0.5–1 GB per film. |
+| **Skip** files already AV1, under 50 MB, or below **0.06 bits/pixel** | Nothing to gain (see below). |
 
 Rough sizes per hour of 1080p: H.264 BluRay remux 15–25 GB, typical H.264 rip 2–4 GB, AV1 CRF 30
 ≈ 0.8–1.5 GB.
 
-**Safety:** it's a dry run by default (reports candidates and an estimate). With `--apply` each file is
-encoded to a hidden temp file, verified (duration within 2 s, smaller than the source) and only then
-moved into place. Originals are replaced only with `--replace`, or written to a separate tree with
-`--out`. Watch progress follows the renamed file.
+**When compaction does *not* pay off (measured):** a 704×400 H.264 episode at 320 kb/s
+(≈ 0.05 bits/pixel, 140 MB per 44 min) re-encoded to AV1 came out **8 % larger** at CRF 30 and only
+11 % smaller at CRF 34, with visible softening. Already heavily compressed SD sources leave AV1 nothing
+to remove. So the analyzer computes bits per pixel per frame and marks such files "already efficiently
+encoded" instead of offering them. AV1 shines on high-bitrate sources: Blu-ray rips, 1080p/4K files of
+several GB.
 
-**Trade-offs:** encoding is slow on CPU (preset 6 is roughly real-time to 2× real-time for 1080p
-on 8 cores), so run it overnight. Old devices without AV1 support fall back to server
-transcoding. Keep originals (`--out`) if any important device is older than ~2019.
+**Safety:** analysis comes first (lists candidates and an estimate) and you pick the files. Each file
+is encoded to a hidden temp file, verified (duration within 2 s, smaller than the source) and only
+then moved into place. You choose either *Replace originals* or *Keep originals and write to another
+folder*. Watch progress follows the renamed file. Progress, speed and cancel are shown live.
+
+**Trade-offs:** encoding is slow on CPU (measured about 7× real-time for SD and roughly 1–2× for
+1080p on 8 cores, at preset 6), so it's best run overnight. Old devices without AV1 support fall back
+to server transcoding. Keep originals if any important device is older than ~2019.
 
 ### 5.3 Further storage ideas (not implemented)
 
@@ -199,6 +238,7 @@ resource exhaustion.
 | **ffmpeg hardening** | `spawn` with argument arrays (no shell), `file:` prefix on every input (a filename can't become `http:`, `concat:`, `pipe:`), `-protocol_whitelist file`, numeric params validated and clamped, processes killed when the client disconnects. |
 | **Resource limits** | Concurrent transcodes capped (`maxTranscodes`). JSON bodies ≤ 16 KB. URL ≤ 2 KB. Header/request/keep-alive timeouts (slowloris). `maxConnections`. Only GET/HEAD/POST. |
 | **Headers** | nosniff, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`, COOP/CORP same-origin, restrictive Permissions-Policy, `noindex`. |
+| **Admin console isolation** | Separate listener bound to `127.0.0.1` only (never on the LAN); remote-address check as well. Unlocked by a per-start 256-bit key that only the launcher (same OS user) can read; the key travels in the URL fragment (never sent in requests or logged) and is swapped for an `HttpOnly; SameSite=Strict` session cookie. POSTs need CSRF token + exact `Origin`; `Host` must be `127.0.0.1`/`localhost` (DNS rebinding). The password hash is never sent to the browser. Media folders can't be system directories; allowed networks can't be `0.0.0.0/0`. |
 | **Least privilege** | Refuses to run as root. umask 077. The systemd unit adds `NoNewPrivileges`, `ProtectSystem=strict`, read-only media, private /tmp, syscall filtering, capability drop and address-family restriction. |
 | **Supply chain** | Zero npm runtime dependencies. Only Node built-ins (`node:sqlite`, `node:crypto`, …) and the distro's ffmpeg. |
 | **Secrets in a public repo** | `config/lumio.json`, `config/tls/` and `data/` are git-ignored. Only `lumio.example.json` is committed. |

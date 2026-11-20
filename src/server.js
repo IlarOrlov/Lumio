@@ -1,68 +1,57 @@
 'use strict';
 const fs = require('node:fs');
+const path = require('node:path');
 const http = require('node:http');
-const https = require('node:https');
-const { loadConfig } = require('./config');
-const { openDb } = require('./db');
-const { Sessions, LoginLimiter } = require('./auth');
-const { Catalog } = require('./catalog');
-const { Progress } = require('./progress');
-const { createApp } = require('./app');
-const media = require('./media');
+const { readRaw, DEFAULTS } = require('./config');
+const { randomToken } = require('./auth');
+const { Runtime } = require('./runtime');
+const { createAdmin } = require('./admin');
+const log = require('./log');
 
-function main() {
+async function main() {
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
     console.error('[lumio] refusing to run as root. Run as a normal user.');
     process.exit(1);
   }
   process.umask(0o077);
 
-  const cfg = loadConfig();
-  media.checkFfmpeg();
+  const runtime = new Runtime();
 
-  const db = openDb(cfg.dataDir);
-  const sessions = new Sessions(db, { sessionDays: cfg.sessionDays });
-  const progress = new Progress(db);
-  const catalog = new Catalog(db, cfg.mediaDirs, { probe: media.probe });
-  catalog.rescan();
+  // Admin console: loopback only, unlocked by a fresh one-time key per start.
+  const adminPort = (readRaw() || {}).adminPort || DEFAULTS.adminPort;
+  const token = randomToken(32);
+  const tokenFile = path.join(runtime.dataDir, 'admin.token');
+  fs.writeFileSync(tokenFile, token, { mode: 0o600 });
+  fs.chmodSync(tokenFile, 0o600);
 
-  const handler = createApp({ cfg, catalog, sessions, progress, limiter: new LoginLimiter() });
-
-  const server = cfg.https
-    ? https.createServer({
-      cert: fs.readFileSync(cfg.tlsCert),
-      key: fs.readFileSync(cfg.tlsKey),
-      minVersion: 'TLSv1.2',
-    }, handler)
-    : http.createServer(handler);
-
-  // Slowloris / resource-exhaustion limits
-  server.headersTimeout = 15_000;
-  server.requestTimeout = 30_000;
-  server.keepAliveTimeout = 10_000;
-  server.maxHeadersCount = 50;
-  server.maxConnections = 200;
-
-  server.listen(cfg.port, cfg.host, () => {
-    const scheme = cfg.https ? 'https' : 'http';
-    console.log(`[lumio] listening on ${scheme}://${cfg.host}:${cfg.port}`);
-    if (!cfg.https) console.warn('[lumio] HTTPS is disabled: passwords and cookies travel in clear text on your LAN.');
+  const admin = http.createServer(createAdmin(runtime, { token, port: adminPort }));
+  admin.headersTimeout = 15_000;
+  admin.requestTimeout = 30_000;
+  await new Promise((resolve, reject) => {
+    admin.once('error', reject);
+    admin.listen(adminPort, '127.0.0.1', resolve);
   });
+  log.info(`admin console on http://127.0.0.1:${adminPort} (this machine only)`);
 
-  const rescan = setInterval(() => catalog.rescan(), cfg.rescanMinutes * 60_000);
-  const purge = setInterval(() => sessions.purgeExpired(), 3_600_000);
-  const shutdown = () => {
-    clearInterval(rescan); clearInterval(purge);
-    server.close(() => { db.close(); process.exit(0); });
-    setTimeout(() => process.exit(0), 3000).unref();
+  if (runtime.isConfigured()) await runtime.start();
+  else log.info('not set up yet: open the admin console to finish setup');
+
+  let closing = false;
+  const shutdown = async () => {
+    if (closing) return;
+    closing = true;
+    setTimeout(() => process.exit(0), 4000).unref();
+    try { fs.unlinkSync(tokenFile); } catch { /* already gone */ }
+    admin.close();
+    admin.closeAllConnections();
+    await runtime.close();
+    process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 }
 
-try {
-  main();
-} catch (e) {
-  console.error(`[lumio] ${e.message}`);
+main().catch((e) => {
+  console.error(`[lumio] ${e.code === 'EADDRINUSE' ? 'Lumio already appears to be running (admin port in use).' : e.message}`);
   process.exit(1);
-}
+});

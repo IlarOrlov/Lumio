@@ -88,15 +88,23 @@ class Sessions {
       listDevices: db.prepare('SELECT id, name, user_agent, created_at, last_seen FROM devices ORDER BY last_seen DESC'),
       deleteDevice: db.prepare('DELETE FROM devices WHERE id = ?'),
       renameDevice: db.prepare('UPDATE devices SET name = ? WHERE id = ?'),
+      findByName: db.prepare('SELECT id FROM devices WHERE name = ? COLLATE NOCASE ORDER BY last_seen DESC LIMIT 1'),
+      endAll: db.prepare('DELETE FROM sessions'),
     };
   }
 
-  /** Registers a new device and returns a fresh session token for it. */
+  /**
+   * Signs a device in and returns a fresh session token. Signing in again with
+   * the same device name (e.g. after "sign out everywhere") reattaches to that
+   * device, so its watch history is kept.
+   */
   createDeviceSession(deviceName, userAgent) {
     const t = this.now();
-    const deviceId = randomToken(12);
     const token = randomToken(32);
-    this.q.insertDevice.run(deviceId, deviceName, String(userAgent || '').slice(0, 300), t, t);
+    const existing = this.q.findByName.get(deviceName);
+    const deviceId = existing ? existing.id : randomToken(12);
+    if (existing) this.q.touch.run(t, deviceId);
+    else this.q.insertDevice.run(deviceId, deviceName, String(userAgent || '').slice(0, 300), t, t);
     this.q.insertSession.run(sha256(token), deviceId, randomToken(24), t, t + this.ttl);
     return { token, deviceId };
   }
@@ -120,6 +128,8 @@ class Sessions {
   listDevices() { return this.q.listDevices.all(); }
   revokeDevice(id) { return this.q.deleteDevice.run(id).changes > 0; }
   renameDevice(id, name) { return this.q.renameDevice.run(name, id).changes > 0; }
+  /** Signs out every device (history is kept; devices sign in again by name). */
+  endAllSessions() { this.q.endAll.run(); }
 }
 
 function safeEqual(a, b) {

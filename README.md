@@ -2,7 +2,8 @@
 
 <h1 align="center">Lumio</h1>
 <p align="center"><b>Your home cinema, on every screen in the house.</b><br>
-A tiny, security-first streaming server for your own movies and series, with per-device resume.</p>
+A tiny, security-first streaming server for your own movies and series, with per-device resume.<br>
+Set up and run entirely from a desktop icon and a web admin console, with no terminal needed.</p>
 
 ---
 
@@ -10,86 +11,72 @@ A tiny, security-first streaming server for your own movies and series, with per
   served directly, MKVs are remuxed on the fly, and only unplayable codecs get transcoded.
 - **Every device remembers.** Open Lumio and "Continue watching on *Living room TV*" is the first
   thing you see. Finished an episode? The next one is waiting as *Up next*, with auto-play.
-- **Series-aware.** Seasons, episode lists, watched ticks, sidecar and embedded subtitles,
-  multiple audio tracks.
+- **Point-and-click admin console.** Setup wizard, folder picker, devices and their history,
+  network and certificate settings, autostart, storage compaction and logs.
 - **Locked down.** HTTPS, scrypt, hashed session tokens, CSRF + Origin checks, strict CSP, LAN-only
-  allowlist, DNS-rebinding guard, sandboxed ffmpeg, systemd hardening.
+  allowlist, DNS-rebinding guard, loopback-only admin console, sandboxed ffmpeg.
   [Details →](docs/DESIGN.md#6-security-model)
-- **Storage-efficient.** Plays files in place with no copies or disk cache. `npm run compact`
-  can shrink your library by ~50 % with AV1 + Opus. [Details →](docs/DESIGN.md#5-storage-efficiency)
+- **Storage-efficient.** Plays files in place with no copies or disk cache. Optional AV1 compaction
+  that skips files where it wouldn't pay off. [Details →](docs/DESIGN.md#5-storage-efficiency)
 - **Zero npm dependencies.** Just Node.js ≥ 22.13 and ffmpeg.
 
-## Quick start (Ubuntu)
+## Install (Ubuntu desktop, one time)
 
-```bash
-sudo apt install -y ffmpeg           # Node.js >= 22.13 is also required
-git clone https://github.com/IlarOrlov/Lumio.git && cd Lumio
-npm run setup                        # password, media folders, port, HTTPS certificate
-npm start
+1. Install **ffmpeg** (Ubuntu Software, or `sudo apt install ffmpeg`) and **Node.js 22+**.
+2. Download this repository (green **Code** button → *Download ZIP*, then extract it, or `git clone`).
+3. In the Files app, open the `launcher` folder, right-click **`install.sh`** → **Run as a Program**.
+   A **Lumio** icon appears on your desktop and in the app menu.
+
+## Use
+
+Double-click **Lumio**. It starts in the background and opens the **admin console** in your browser:
+
+- **First time:** a 3-step wizard asks for a household password, your video folders (click to browse)
+  and your PC's address. That's all.
+- **Overview** shows the address to open on your phone/TV (e.g. `https://192.168.1.20:8443`),
+  start/stop, and a switch to *start automatically with the computer*.
+- **Library**: add/remove folders, rescan. **Devices**: rename, remove, view watch history.
+  **Network & Security**: address, port, HTTPS certificate, password. **Storage**: shrink files.
+  **Logs**: what's happening.
+- **Quit Lumio** is at the bottom of the sidebar.
+
+On each phone/TV: open the address, accept the one-time certificate warning, enter the password and
+give the device a name. Each device keeps its own history.
+
+### Library layout
+
+```
+Videos/Movies/Inception (2010).mkv
+Videos/Series/The Mentalist/Season 1/The Mentalist S01E01.mp4    (+ ...S01E01.ru.srt)
 ```
 
-Open `https://<server-ip>:8443` and accept the self-signed certificate once per device. Sign in
-and give the device a name.
-
-```bash
-npm test                             # run the test suite
-npm run compact                      # dry run: how much space AV1 would save
-```
+Episodes are recognised by `S01E02` (or `1x02`). Release tags (`1080p`, `x264`, …) are ignored.
+Optional `poster.jpg` in a folder is used as its cover.
 
 ## Running inside a VMware VM (NAT)
 
-With the VM on **NAT**, other devices can't reach the VM's address (e.g. `192.168.204.128`) directly.
-Forward a port on the host instead:
+With the VM on **NAT**, other devices can't reach the VM directly. The admin console
+(*Network & Security*) shows these steps with your actual addresses filled in:
 
-1. **VMware Workstation → Edit → Virtual Network Editor** → *Change Settings* (admin) → select
-   **VMnet8 (NAT)** → **NAT Settings… → Add**:
-   - Host port: `8443`
-   - Type: `TCP`
-   - Virtual machine IP address: your VM's IP (`ip -4 addr show ens33`)
-   - Virtual machine port: `8443`
-
-   Click OK and Apply.
-2. **Windows firewall on the host:** allow inbound TCP 8443 for the **Private** profile only
-   (PowerShell as admin):
-   ```powershell
-   New-NetFirewallRule -DisplayName "Lumio (LAN)" -Direction Inbound -Protocol TCP -LocalPort 8443 -Profile Private -RemoteAddress LocalSubnet -Action Allow
-   ```
-   Make sure your home Wi-Fi is set as a *Private* network in Windows.
-3. **Keep the VM's IP stable:** VMware's DHCP can change it. Either reserve it in
-   `C:\ProgramData\VMware\vmnetdhcp.conf` or set a static IP in the VM.
-4. **Firewall inside the VM** (forwarded traffic arrives from the VMware NAT gateway):
-   ```bash
-   sudo ufw allow from 192.168.204.0/24 to any port 8443 proto tcp
-   sudo ufw enable
-   ```
-5. On your phone or TV open **`https://<Windows-host-LAN-IP>:8443`** (find it with `ipconfig` on Windows).
-   When `npm run setup` asks for the host IP, give this address so the certificate matches.
+1. **VMware Workstation → Edit → Virtual Network Editor → Change Settings → VMnet8 (NAT) →
+   NAT Settings… → Add**: host port `8443`, TCP, VM IP (shown in the console), VM port `8443`.
+2. Allow the Windows firewall prompt for **Private networks only**, and make sure your home Wi-Fi is
+   a *Private* network in Windows.
+3. Enter your Windows PC's IP (`ipconfig`) in *Network & Security*. Lumio renews its certificate
+   to match.
+4. On a phone open `https://<Windows-PC-IP>:8443`.
 
 > Never forward this port on your internet router. Lumio is built for your home network only.
 
-## Run as a service
+## For developers
 
 ```bash
-sudo cp deploy/lumio.service /etc/systemd/system/
-sudo systemctl edit --full lumio     # replace CHANGE_ME with your user and paths
-sudo systemctl daemon-reload && sudo systemctl enable --now lumio
-journalctl -u lumio -f
+npm test     # 23 tests: security pipeline, per-device progress, admin console, parsing
+npm start    # run in the foreground instead of via the launcher
 ```
 
-## Library layout
-
-```
-Movies/Inception (2010).mkv
-Movies/The Matrix (1999)/The.Matrix.1999.1080p.mkv     (+ poster.jpg)
-Series/Dark/Season 1/Dark S01E01.mkv                    (+ Dark S01E01.en.srt)
-```
-
-Episodes are recognised by `S01E02` or `1x02`. New files show up within 15 minutes, or straight away
-with Settings → Rescan.
-
-## Keyboard / remote
-
-`Space`/`Enter` play/pause · `←` back 10 s · `→` forward 30 s · `F` fullscreen · `Esc` back
+The launcher runs Lumio as a `systemd --user` service (`journalctl --user -u lumio` for logs).
+`deploy/lumio.service` is a hardened system-wide unit for headless servers.
 
 ## Docs
 

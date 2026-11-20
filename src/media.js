@@ -60,7 +60,7 @@ async function probe(filePath) {
       width: video.width, height: video.height,
     } : null,
     audio: audio.map((s, i) => ({
-      index: i, codec: s.codec_name, channels: s.channels || 2,
+      index: i, codec: s.codec_name, channels: s.channels || 2, bitRate: Number(s.bit_rate) || 0,
       language: tag(s, 'language'), title: tag(s, 'title'),
       default: !!(s.disposition && s.disposition.default),
     })),

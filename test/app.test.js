@@ -52,8 +52,8 @@ async function req(base, p, { method = 'GET', body, cookie, csrf, headers = {} }
   return { status: r.status, headers: r.headers, json, text };
 }
 
-async function login(base) {
-  const r = await req(base, '/api/login', { method: 'POST', body: { password: PASSWORD, deviceName: 'Test <TV>' } });
+async function login(base, deviceName = 'Test <TV>') {
+  const r = await req(base, '/api/login', { method: 'POST', body: { password: PASSWORD, deviceName } });
   assert.equal(r.status, 200);
   const cookie = r.headers.get('set-cookie').split(';')[0];
   const me = await req(base, '/api/me', { cookie });
@@ -115,7 +115,7 @@ test('progress is tracked per device and drives Continue watching', async (t) =>
   const { server, base, catalog } = await setup();
   t.after(() => server.close());
   const a = await login(base);
-  const b = await login(base);
+  const b = await login(base, 'Phone');
   assert.equal(a.me.deviceName, 'Test TV', 'device name is sanitised');
   const movie = [...catalog.items.values()].find((i) => i.kind === 'movie');
   await req(base, '/api/progress', { method: 'POST', cookie: a.cookie, csrf: a.csrf, body: { id: movie.id, position: 40, duration: 100 } });
@@ -170,9 +170,21 @@ test('revoking a device kills its session and history', async (t) => {
   const { server, base } = await setup();
   t.after(() => server.close());
   const a = await login(base);
-  const b = await login(base);
+  const b = await login(base, 'Phone');
   const r = await req(base, '/api/devices/revoke', { method: 'POST', cookie: a.cookie, csrf: a.csrf, body: { id: b.me.deviceId } });
   assert.equal(r.status, 200);
   assert.equal((await req(base, '/api/me', { cookie: b.cookie })).status, 401);
   assert.equal((await req(base, '/api/me', { cookie: a.cookie })).status, 200);
+});
+
+test('signing in again with the same device name keeps its history', async (t) => {
+  const { server, base, catalog } = await setup();
+  t.after(() => server.close());
+  const a = await login(base, 'Kitchen');
+  const movie = [...catalog.items.values()].find((i) => i.kind === 'movie');
+  await req(base, '/api/progress', { method: 'POST', cookie: a.cookie, csrf: a.csrf, body: { id: movie.id, position: 50, duration: 100 } });
+  const again = await login(base, 'kitchen');
+  assert.equal(again.me.deviceId, a.me.deviceId);
+  const p = await req(base, '/api/progress', { cookie: again.cookie });
+  assert.equal(p.json.continue[0].position, 50);
 });
