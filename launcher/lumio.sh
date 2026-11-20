@@ -7,7 +7,7 @@ set -euo pipefail
 LUMIO_DIR="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT="$UNIT_DIR/lumio.service"
-TOKEN_FILE="$LUMIO_DIR/data/admin.token"
+KEY_SOCKET="$LUMIO_DIR/data/admin.sock"
 
 notify() {
   if command -v zenity >/dev/null; then zenity --error --title="Lumio" --text="$1" 2>/dev/null || true
@@ -55,18 +55,25 @@ if [ ! -f "$UNIT" ] || [ "$(cat "$UNIT")" != "$NEW_UNIT" ]; then
 fi
 
 if ! systemctl --user is-active --quiet lumio.service; then
-  rm -f "$TOKEN_FILE"
   systemctl --user start lumio.service
 fi
 
-# Wait (up to 20 s) for the admin console and its one-time key.
+# Ask the running server for a fresh single-use key (valid 60 s) over its
+# owner-only unix socket. Waits up to 20 s for Lumio to come up.
+KEY=""
 for _ in $(seq 1 80); do
-  if [ -s "$TOKEN_FILE" ] && (exec 3<>"/dev/tcp/127.0.0.1/$ADMIN_PORT") 2>/dev/null; then break; fi
+  if [ -S "$KEY_SOCKET" ] && (exec 3<>"/dev/tcp/127.0.0.1/$ADMIN_PORT") 2>/dev/null; then
+    KEY="$("$NODE" -e "
+      const s=require('net').connect(process.argv[1]);let d='';
+      s.on('data',c=>d+=c);s.on('end',()=>process.stdout.write(d));s.on('error',()=>process.exit(1));
+    " "$KEY_SOCKET" 2>/dev/null || true)"
+    [ -n "$KEY" ] && break
+  fi
   sleep 0.25
 done
-if [ ! -s "$TOKEN_FILE" ]; then
+if [ -z "$KEY" ]; then
   notify "Lumio did not start. Details: journalctl --user -u lumio"
   exit 1
 fi
 
-xdg-open "http://127.0.0.1:$ADMIN_PORT/#key=$(cat "$TOKEN_FILE")" >/dev/null 2>&1 &
+xdg-open "http://127.0.0.1:$ADMIN_PORT/#key=$KEY" >/dev/null 2>&1 &

@@ -96,7 +96,8 @@ Everything is configured from a browser UI. Nothing needs the command line.
 Desktop icon "Lumio" ─▶ launcher/lumio.sh
                           ├─ writes ~/.config/systemd/user/lumio.service (absolute node path, sandbox options)
                           ├─ systemctl --user start lumio        (no root, runs in background)
-                          ├─ waits for data/admin.token (fresh 256-bit key per start, mode 600)
+                          ├─ asks data/admin.sock (unix socket, 0600 in a 0700 dir) for a key:
+                          │     256-bit, single-use, expires in 60 s
                           └─ xdg-open http://127.0.0.1:8442/#key=<token>
 Browser ─▶ admin console (loopback only) ─ exchanges key for a session cookie ─ strips key from URL
 ```
@@ -238,7 +239,7 @@ resource exhaustion.
 | **ffmpeg hardening** | `spawn` with argument arrays (no shell), `file:` prefix on every input (a filename can't become `http:`, `concat:`, `pipe:`), `-protocol_whitelist file`, numeric params validated and clamped, processes killed when the client disconnects. |
 | **Resource limits** | Concurrent transcodes capped (`maxTranscodes`). JSON bodies ≤ 16 KB. URL ≤ 2 KB. Header/request/keep-alive timeouts (slowloris). `maxConnections`. Only GET/HEAD/POST. |
 | **Headers** | nosniff, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`, COOP/CORP same-origin, restrictive Permissions-Policy, `noindex`. |
-| **Admin console isolation** | Separate listener bound to `127.0.0.1` only (never on the LAN); remote-address check as well. Unlocked by a per-start 256-bit key that only the launcher (same OS user) can read; the key travels in the URL fragment (never sent in requests or logged) and is swapped for an `HttpOnly; SameSite=Strict` session cookie. POSTs need CSRF token + exact `Origin`; `Host` must be `127.0.0.1`/`localhost` (DNS rebinding). The password hash is never sent to the browser. Media folders can't be system directories; allowed networks can't be `0.0.0.0/0`. |
+| **Admin console isolation** | Separate listener bound to `127.0.0.1` only (never on the LAN); remote-address check as well. Unlocked by a 256-bit key that is **single-use and expires after 60 s**, issued only over an owner-only unix socket (so only the same OS user can get one). It briefly appears in the browser's command line, which other local users could read, but by then it's consumed or expired. It travels in the URL fragment (never sent in requests or logged) and is swapped for an `HttpOnly; SameSite=Strict` session cookie. POSTs need CSRF token + exact `Origin`; `Host` must be `127.0.0.1`/`localhost` (DNS rebinding). The password hash is never sent to the browser. Media folders can't be system directories; allowed networks can't be `0.0.0.0/0`. |
 | **Least privilege** | Refuses to run as root. umask 077. The systemd unit adds `NoNewPrivileges`, `ProtectSystem=strict`, read-only media, private /tmp, syscall filtering, capability drop and address-family restriction. |
 | **Supply chain** | Zero npm runtime dependencies. Only Node built-ins (`node:sqlite`, `node:crypto`, …) and the distro's ffmpeg. |
 | **Secrets in a public repo** | `config/lumio.json`, `config/tls/` and `data/` are git-ignored. Only `lumio.example.json` is committed. |

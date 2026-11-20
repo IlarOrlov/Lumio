@@ -18,15 +18,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Runtime } = require('../src/runtime');
 const { createAdmin } = require('../src/admin');
-
-const TOKEN = 'x'.repeat(43);
+const { AdminKeys } = require('../src/adminkeys');
 
 async function start() {
   const runtime = new Runtime();
+  const keys = new AdminKeys();
   const server = http.createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
-  server.on('request', createAdmin(runtime, { token: TOKEN, port }));
+  server.on('request', createAdmin(runtime, { keys, port }));
   const base = `http://127.0.0.1:${port}`;
   let cookie = '';
   let csrf = '';
@@ -41,7 +41,7 @@ async function start() {
     if (json && json.csrf) csrf = json.csrf;
     return { status: r.status, json };
   };
-  return { runtime, server, port, call, close: async () => { await runtime.close(); server.close(); } };
+  return { runtime, server, port, call, keys, close: async () => { await runtime.close(); server.close(); } };
 }
 
 test('admin console access control and first-run setup', async (t) => {
@@ -58,8 +58,10 @@ test('admin console access control and first-run setup', async (t) => {
   });
   assert.equal(hostStatus, 421);
 
-  // unlock
-  assert.equal((await a.call('/api/auth', { token: TOKEN })).status, 200);
+  // unlock with a one-time key; the same key can't be used twice
+  const key = a.keys.issue();
+  assert.equal((await a.call('/api/auth', { token: key })).status, 200);
+  assert.equal((await a.call('/api/auth', { token: key })).status, 401, 'keys are single-use');
   const st = await a.call('/api/status');
   assert.equal(st.status, 200);
   assert.equal(st.json.configured, false);
@@ -99,4 +101,23 @@ test('admin console access control and first-run setup', async (t) => {
   assert.equal((await a.call('/api/status')).json.running, false);
   await a.call('/api/server', { action: 'start' });
   assert.equal((await a.call('/api/status')).json.running, true);
+});
+
+test('admin keys expire and are served on an owner-only socket', async () => {
+  let t = 0;
+  const keys = new AdminKeys({ ttlMs: 1000, now: () => t });
+  const k = keys.issue();
+  t = 1500;
+  assert.equal(keys.consume(k), false, 'expired');
+  const sock = path.join(TMP, 'k.sock');
+  const live = new AdminKeys();
+  const srv = await live.listen(sock);
+  assert.equal(fs.statSync(sock).mode & 0o777, 0o600);
+  const got = await new Promise((resolve) => {
+    let d = '';
+    require('node:net').connect(sock).on('data', (c) => { d += c; }).on('end', () => resolve(d));
+  });
+  srv.close();
+  assert.equal(live.consume(got), true);
+  assert.equal(live.consume(got), false);
 });

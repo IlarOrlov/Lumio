@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const { readRaw, DEFAULTS } = require('./config');
-const { randomToken } = require('./auth');
+const { AdminKeys } = require('./adminkeys');
 const { Runtime } = require('./runtime');
 const { createAdmin } = require('./admin');
 const log = require('./log');
@@ -17,20 +17,22 @@ async function main() {
 
   const runtime = new Runtime();
 
-  // Admin console: loopback only, unlocked by a fresh one-time key per start.
+  // Admin console: loopback only, unlocked by single-use 60 s keys that the
+  // launcher fetches over an owner-only unix socket in the 0700 data dir.
   const adminPort = (readRaw() || {}).adminPort || DEFAULTS.adminPort;
-  const token = randomToken(32);
-  const tokenFile = path.join(runtime.dataDir, 'admin.token');
-  fs.writeFileSync(tokenFile, token, { mode: 0o600 });
-  fs.chmodSync(tokenFile, 0o600);
+  fs.chmodSync(runtime.dataDir, 0o700);
+  try { fs.unlinkSync(path.join(runtime.dataDir, 'admin.token')); } catch { /* legacy file */ }
+  const keys = new AdminKeys();
+  const keySocketPath = path.join(runtime.dataDir, 'admin.sock');
 
-  const admin = http.createServer(createAdmin(runtime, { token, port: adminPort }));
+  const admin = http.createServer(createAdmin(runtime, { keys, port: adminPort }));
   admin.headersTimeout = 15_000;
   admin.requestTimeout = 30_000;
   await new Promise((resolve, reject) => {
     admin.once('error', reject);
     admin.listen(adminPort, '127.0.0.1', resolve);
   });
+  const keySocket = await keys.listen(keySocketPath);
   log.info(`admin console on http://127.0.0.1:${adminPort} (this machine only)`);
 
   if (runtime.isConfigured()) await runtime.start();
@@ -41,7 +43,7 @@ async function main() {
     if (closing) return;
     closing = true;
     setTimeout(() => process.exit(0), 4000).unref();
-    try { fs.unlinkSync(tokenFile); } catch { /* already gone */ }
+    keySocket.close();
     admin.close();
     admin.closeAllConnections();
     await runtime.close();

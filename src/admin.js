@@ -1,8 +1,9 @@
 'use strict';
 /*
  * Admin console. Listens on 127.0.0.1 only (never the LAN). Access requires
- * the one-time key the desktop launcher reads from data/admin.token (owner-
- * only file), exchanged for an HttpOnly, SameSite=Strict session cookie.
+ * a single-use, 60-second key the desktop launcher fetches over an owner-only
+ * unix socket (see adminkeys.js), exchanged for an HttpOnly, SameSite=Strict
+ * session cookie.
  * Every POST additionally needs a CSRF header and a same-origin Origin.
  */
 const fs = require('node:fs');
@@ -20,7 +21,7 @@ const VIDEO_EXT = /\.(mkv|mp4|m4v|webm|mov)$/i;
 const DEVICE_RE = /^[A-Za-z0-9_-]{16}$/;
 const COOKIE = 'lumio_admin';
 
-function createAdmin(runtime, { token, port }) {
+function createAdmin(runtime, { keys, port }) {
   const statics = loadStatic(path.join(__dirname, '..', 'admin'));
   const sessions = new Map(); // sid -> { csrf, exp }
   let failures = 0;
@@ -140,9 +141,9 @@ function createAdmin(runtime, { token, port }) {
     if (m === 'POST' && p === '/api/auth') {
       if (Date.now() < lockedUntil) return sendError(res, 429, 'Too many attempts, wait a minute');
       const b = await readJson(req, 1024);
-      if (typeof b.token !== 'string' || !safeEqual(b.token, token)) {
+      if (!keys.consume(b.token)) {
         if (++failures >= 10) { lockedUntil = Date.now() + 60_000; failures = 0; }
-        return sendError(res, 401, 'Invalid admin key. Open the console with the Lumio desktop icon.');
+        return sendError(res, 401, 'This admin link was already used or has expired. Open the console with the Lumio desktop icon.');
       }
       failures = 0;
       const sid = randomToken(32);
