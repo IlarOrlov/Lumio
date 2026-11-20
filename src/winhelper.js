@@ -99,8 +99,9 @@ try {
   }
   $body = @{ token = $Token; hostIp = $HostIp } | ConvertTo-Json -Compress
   try {
-    Invoke-RestMethod -Method Post -Uri "$($Scheme)://$($VmIp):$Port/api/host-report" -ContentType 'application/json' -Body $body -TimeoutSec 15 | Out-Null
-    Ok 'Lumio updated its address and certificate'
+    $r = Invoke-RestMethod -Method Post -Uri "$($Scheme)://$($VmIp):$Port/api/host-report" -ContentType 'application/json' -Body $body -TimeoutSec 15
+    if ($r.pending) { Warn "Lumio received this PC's address. Confirm it once in the Lumio admin console (Overview -> Apply)." }
+    else { Ok 'Lumio updated its address and certificate' }
   } catch {
     Warn "Couldn't reach Lumio automatically ($($_.Exception.Message)). Enter $HostIp in the Lumio admin console -> Network & Security."
   }

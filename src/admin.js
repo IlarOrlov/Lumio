@@ -197,9 +197,15 @@ function createAdmin(runtime, { keys, port }) {
       return res.end(pem);
     }
     if (m === 'GET' && p === '/api/windows-helper') {
-      const body = Buffer.from(runtime.windowsHelper());
+      const body = Buffer.from(runtime.windowsHelper({ autoApply: true }));
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="Lumio-Windows-Setup.cmd"', 'Content-Length': body.length, 'Cache-Control': 'no-store' });
       return res.end(body);
+    }
+    if (m === 'POST' && (p === '/api/host/apply' || p === '/api/host/dismiss')) {
+      const pending = runtime.pendingHost;
+      if (!pending) return sendError(res, 404, 'Nothing pending');
+      if (p.endsWith('apply')) runtime.applyHost(pending.ip); else runtime.pendingHost = null;
+      return sendJson(res, 200, { ok: true });
     }
     if (m === 'POST' && p === '/api/server') {
       const b = await readJson(req);

@@ -64,7 +64,8 @@ and double-click `Lumio-Windows-Setup.cmd`. After asking for admin rights it:
 - adds a firewall rule for **Private networks and your local subnet only**
 - offers to remove old "block" rules for VMware NAT and to switch your Wi-Fi to *Private*
 - detects the PC's home-network IP and reports it to Lumio (single-use token, TLS pinned to Lumio's
-  certificate), so Lumio's address and certificate update automatically
+  certificate). Then click **Apply** on the admin console's Overview (helpers downloaded from the
+  admin console itself apply automatically)
 - prints the address to open on your phone
 
 **Manual alternative** (also shown in the admin console with your addresses filled in):

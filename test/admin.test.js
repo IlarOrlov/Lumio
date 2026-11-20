@@ -96,18 +96,28 @@ test('admin console access control and first-run setup', async (t) => {
   assert.equal(fs.statSync(process.env.LUMIO_CONFIG).mode & 0o777, 0o600);
   assert.equal(raw.dataDir, path.join(TMP, 'data'), 'custom data dir preserved');
 
-  // Windows helper: download carries a single-use token; report sets the host IP + renews cert
-  const helper = a.runtime.windowsHelper();
-  const tok = /\$Token = '([A-Za-z0-9_-]+)'/.exec(helper)[1];
-  assert.throws(() => a.runtime.hostReport(tok, '8.8.8.8'), /private/);
+  // Windows helper. Viewer download: the report is only a proposal the owner confirms.
+  const tokOf = (txt) => /\$Token = '([A-Za-z0-9_-]+)'/.exec(txt)[1];
+  const viewerTok = tokOf(a.runtime.windowsHelper());
+  assert.throws(() => a.runtime.hostReport(viewerTok, '8.8.8.8'), /private/);
   assert.throws(() => a.runtime.hostReport('nope'.repeat(10), '192.168.1.50'), /token/);
-  const helper2 = a.runtime.windowsHelper();
-  const tok2 = /\$Token = '([A-Za-z0-9_-]+)'/.exec(helper2)[1];
-  assert.deepEqual(a.runtime.hostReport(tok2, '192.168.1.50'), { ok: true });
-  assert.throws(() => a.runtime.hostReport(tok2, '192.168.1.50'), /token/, 'single use');
-  const st2 = await a.call('/api/status');
+  assert.deepEqual(a.runtime.hostReport(viewerTok, '192.168.1.60'), { ok: true, pending: true });
+  assert.throws(() => a.runtime.hostReport(viewerTok, '192.168.1.60'), /token/, 'single use');
+  let st2 = await a.call('/api/status');
+  assert.equal(st2.json.config.publicHost, '192.168.1.77', 'viewer helper cannot change settings by itself');
+  assert.equal(st2.json.pendingHost.ip, '192.168.1.60');
+  assert.equal((await a.call('/api/host/apply', {})).status, 200);
+  await new Promise((r) => setTimeout(r, 900));
+  st2 = await a.call('/api/status');
+  assert.equal(st2.json.config.publicHost, '192.168.1.60');
+  assert.equal(st2.json.pendingHost, null);
+  // Admin download: applies directly; certificate keeps earlier names
+  const adminTok = tokOf(a.runtime.windowsHelper({ autoApply: true }));
+  assert.deepEqual(a.runtime.hostReport(adminTok, '192.168.1.50'), { ok: true, pending: false });
+  st2 = await a.call('/api/status');
   assert.equal(st2.json.config.publicHost, '192.168.1.50');
   assert.ok(st2.json.config.cert.sans.includes('192.168.1.50'));
+  assert.ok(st2.json.config.cert.sans.includes('192.168.1.60'), 'SANs merged, not replaced');
   await new Promise((r) => setTimeout(r, 900)); // let the deferred restart finish
 
   // stop / start

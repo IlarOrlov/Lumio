@@ -120,8 +120,11 @@ backup), restarts the VMware NAT service, and adds a firewall rule limited to th
 LocalSubnet. It offers to remove inbound *block* rules for `vmnat.exe` (they override allow rules) and
 to switch a Public home network to Private. Finally it POSTs the PC's LAN IP to `/api/host-report`
 with a **single-use, 2-hour token** baked into that download, over TLS **pinned to Lumio's
-certificate SHA-256**. Lumio then stores the address, renews its certificate for it and restarts
-streaming. Every value in the script is generated from validated data (IPv4 literal, integer port,
+certificate SHA-256**. If the helper came from the admin console, Lumio stores the address, renews
+its certificate (adding the address to the existing names) and restarts streaming. If it was
+downloaded by a signed-in viewer device, the address is only **proposed**, and the owner applies it
+with one click on the admin Overview. Household devices can run the Windows-side setup but can't
+change server settings. Every value in the script is generated from validated data (IPv4 literal, integer port,
 hex fingerprint, base64url token); nothing user-supplied is interpolated.
 
 Settings apply immediately: `Runtime` restarts the streaming listener in-process. Device sessions
@@ -272,7 +275,7 @@ resource exhaustion.
 | **Resource limits** | Concurrent transcodes capped (`maxTranscodes`). JSON bodies ≤ 16 KB. URL ≤ 2 KB. Header/request/keep-alive timeouts (slowloris). `maxConnections`. Only GET/HEAD/POST. |
 | **Headers** | nosniff, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`, COOP/CORP same-origin, restrictive Permissions-Policy, `noindex`. |
 | **Admin console isolation** | Separate listener bound to `127.0.0.1` only (never on the LAN); remote-address check as well. Unlocked by a 256-bit key that is **single-use and expires after 60 s**, issued only over an owner-only unix socket (so only the same OS user can get one). It briefly appears in the browser's command line, which other local users could read, but by then it's consumed or expired. It travels in the URL fragment (never sent in requests or logged) and is swapped for an `HttpOnly; SameSite=Strict` session cookie. POSTs need CSRF token + exact `Origin`; `Host` must be `127.0.0.1`/`localhost` (DNS rebinding). The password hash is never sent to the browser. Media folders can't be system directories; allowed networks can't be `0.0.0.0/0`. |
-| **Windows helper** | Download requires a signed-in device (viewer) or the admin console. The host-report endpoint accepts only a single-use, 2 h token and a private IPv4 address; the IP is validated before the token is consumed. The helper pins Lumio's certificate fingerprint, so it can't be tricked into reporting to another server. Firewall rule: Private profile and LocalSubnet only. |
+| **Windows helper** | Download requires a signed-in device (viewer) or the admin console. The host-report endpoint accepts only a single-use, 2 h token and a private IPv4 address; the IP is validated before the token is consumed. Viewer-issued tokens can only *propose* an address (owner confirms in the admin console); only admin-issued tokens apply directly. Certificate renewals merge names instead of replacing them. The helper pins Lumio's certificate fingerprint, so it can't be tricked into reporting to another server. Firewall rule: Private profile and LocalSubnet only. |
 | **Least privilege** | Refuses to run as root. umask 077. The systemd unit adds `NoNewPrivileges`, `ProtectSystem=strict`, read-only media, private /tmp, syscall filtering, capability drop and address-family restriction. |
 | **Supply chain** | Zero npm runtime dependencies. Only Node built-ins (`node:sqlite`, `node:crypto`, …) and the distro's ffmpeg. |
 | **Secrets in a public repo** | `config/lumio.json`, `config/tls/` and `data/` are git-ignored. Only `lumio.example.json` is committed. |

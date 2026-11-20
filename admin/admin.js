@@ -253,6 +253,13 @@
         : [h('button', { class: 'btn primary', onclick: function (e) { busy(e.target, api('/api/server', { action: 'start' })).then(function () { go('overview'); }); } }, '▶ Start streaming')];
       var lib = s.library || { movies: 0, shows: 0, episodes: 0, bytes: 0 };
       var warnings = [];
+      if (s.pendingHost) {
+        warnings.push(h('div', { class: 'panel hl' }, h('strong', { text: 'The Windows helper reported this PC\'s address: ' + s.pendingHost.ip }),
+          h('p', { class: 'muted', text: 'Apply it so phones and TVs use this address (the certificate is renewed automatically).' }),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn primary', onclick: function (e) { busy(e.target, api('/api/host/apply', {})).then(function () { toast('Address applied'); setTimeout(function () { go('overview'); }, 1200); }); } }, 'Apply ' + s.pendingHost.ip),
+            h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/host/dismiss', {})).then(function () { go('overview'); }); } }, 'Dismiss'))));
+      }
       if (s.error) warnings.push(h('div', { class: 'panel' }, h('strong', { class: 'err', text: 'Lumio couldn\'t start: ' }), s.error));
       if (!c.publicHost) {
         warnings.push(h('div', { class: 'panel' }, h('strong', { text: '⚠ Add your Windows PC\'s IP address' }),

@@ -37,38 +37,60 @@ class Runtime {
     this.error = null;
     this.startedAt = null;
     this.compactor = new Compactor({ db: this.db, catalog: () => this.requireCatalog(), log });
-    this.helperTokens = new Map(); // single-use tokens for the Windows helper -> expiry
+    this.helperTokens = new Map(); // single-use Windows-helper token -> { exp, autoApply }
+    this.pendingHost = null;       // address proposed by a viewer-downloaded helper
   }
 
-  /** Generates the Windows setup helper with a fresh single-use report token (2 h). */
-  windowsHelper() {
+  /**
+   * Generates the Windows setup helper with a fresh single-use report token (2 h).
+   * autoApply: true only for downloads from the admin console (loopback, owner).
+   * Helpers downloaded by a signed-in viewer device only *propose* the address;
+   * the owner confirms it in the admin console, so household devices can't
+   * change server settings.
+   */
+  windowsHelper({ autoApply = false } = {}) {
     const raw = { ...DEFAULTS, ...(readRaw() || {}) };
     const now = Date.now();
-    for (const [k, exp] of this.helperTokens) if (exp < now) this.helperTokens.delete(k);
+    for (const [k, t] of this.helperTokens) if (t.exp < now) this.helperTokens.delete(k);
     const token = randomToken(32);
-    this.helperTokens.set(token, now + 2 * 3_600_000);
+    this.helperTokens.set(token, { exp: now + 2 * 3_600_000, autoApply: !!autoApply });
     const cert = raw.https ? certInfo(resolveFromRoot(raw.tlsCert)) : null;
     const vmIp = localIps().find((ip) => net.isIPv4(ip));
     return buildWindowsHelper({ vmIp, port: raw.port, https: !!raw.https, fingerprint: cert && cert.fingerprint, token });
   }
 
-  /** Called by the helper: records the Windows PC's LAN IP, renews the cert, restarts. */
+  /** Called by the helper with the Windows PC's LAN IP. */
   hostReport(token, hostIp) {
     if (!net.isIPv4(hostIp) || !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostIp)) {
       throw Object.assign(new Error('Expected a private IPv4 address'), { status: 400 });
     }
-    let valid = false;
-    for (const [k, exp] of this.helperTokens) {
-      if (typeof token === 'string' && safeEqual(k, token) && exp >= Date.now()) { this.helperTokens.delete(k); valid = true; break; }
+    let entry = null;
+    for (const [k, t] of this.helperTokens) {
+      if (typeof token === 'string' && safeEqual(k, token) && t.exp >= Date.now()) { this.helperTokens.delete(k); entry = t; break; }
     }
-    if (!valid) throw Object.assign(new Error('Invalid or expired helper token'), { status: 403 });
+    if (!entry) throw Object.assign(new Error('Invalid or expired helper token'), { status: 403 });
+    if (!entry.autoApply) {
+      this.pendingHost = { ip: hostIp, at: Date.now() };
+      log.info(`Windows helper proposed host PC address ${hostIp}; waiting for confirmation in the admin console`);
+      return { ok: true, pending: true };
+    }
+    this.applyHost(hostIp);
+    return { ok: true, pending: false };
+  }
+
+  /** Stores the host PC address, renews the certificate (keeping existing names), restarts. */
+  applyHost(hostIp) {
+    if (!net.isIPv4(hostIp)) throw new Error('Invalid address');
     const raw = { ...DEFAULTS, ...(readRaw() || {}) };
     const cur = readRaw() || {};
     writeRaw({ ...cur, publicHost: hostIp });
-    if (raw.https) generateCert(resolveFromRoot(raw.tlsCert), resolveFromRoot(raw.tlsKey), [hostIp]);
-    log.info(`Windows helper reported host PC address ${hostIp}; certificate renewed`);
+    if (raw.https) {
+      const old = certInfo(resolveFromRoot(raw.tlsCert));
+      generateCert(resolveFromRoot(raw.tlsCert), resolveFromRoot(raw.tlsKey), [...new Set([...(old ? old.sans : []), hostIp])]);
+    }
+    this.pendingHost = null;
+    log.info(`host PC address set to ${hostIp}; certificate renewed`);
     setTimeout(() => this.restart(), 500); // after the response is sent
-    return { ok: true };
   }
 
   requireCatalog() {
@@ -93,7 +115,7 @@ class Runtime {
       this.catalog.rescan();
       this.handler = createApp({
         cfg, catalog: this.catalog, sessions: this.sessions, progress: this.progress, limiter: this.limiter, log,
-        helper: { download: () => this.windowsHelper(), report: (t, ip) => this.hostReport(t, ip) },
+        helper: { download: () => this.windowsHelper({ autoApply: false }), report: (t, ip) => this.hostReport(t, ip) },
       });
       const server = cfg.https
         ? https.createServer({ cert: fs.readFileSync(cfg.tlsCert), key: fs.readFileSync(cfg.tlsKey), minVersion: 'TLSv1.2' }, this.handler)
@@ -149,6 +171,7 @@ class Runtime {
       error: this.error,
       startedAt: this.startedAt,
       library: lib ? { movies, episodes, shows: lib.shows.size, bytes } : null,
+      pendingHost: this.pendingHost,
       activeStreams: this.handler ? this.handler.active.remux + this.handler.active.transcode : 0,
       transcodes: this.handler ? this.handler.active.transcode : 0,
     };
