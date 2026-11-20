@@ -3,7 +3,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const https = require('node:https');
-const { loadConfig, readRaw, resolveFromRoot, DEFAULTS } = require('./config');
+const net = require('node:net');
+const { loadConfig, readRaw, writeRaw, resolveFromRoot, DEFAULTS } = require('./config');
+const { randomToken, safeEqual } = require('./auth');
+const { generateCert, certInfo, localIps } = require('./tls');
+const { buildWindowsHelper } = require('./winhelper');
 const { openDb } = require('./db');
 const { Sessions, LoginLimiter } = require('./auth');
 const { Catalog } = require('./catalog');
@@ -33,6 +37,38 @@ class Runtime {
     this.error = null;
     this.startedAt = null;
     this.compactor = new Compactor({ db: this.db, catalog: () => this.requireCatalog(), log });
+    this.helperTokens = new Map(); // single-use tokens for the Windows helper -> expiry
+  }
+
+  /** Generates the Windows setup helper with a fresh single-use report token (2 h). */
+  windowsHelper() {
+    const raw = { ...DEFAULTS, ...(readRaw() || {}) };
+    const now = Date.now();
+    for (const [k, exp] of this.helperTokens) if (exp < now) this.helperTokens.delete(k);
+    const token = randomToken(32);
+    this.helperTokens.set(token, now + 2 * 3_600_000);
+    const cert = raw.https ? certInfo(resolveFromRoot(raw.tlsCert)) : null;
+    const vmIp = localIps().find((ip) => net.isIPv4(ip));
+    return buildWindowsHelper({ vmIp, port: raw.port, https: !!raw.https, fingerprint: cert && cert.fingerprint, token });
+  }
+
+  /** Called by the helper: records the Windows PC's LAN IP, renews the cert, restarts. */
+  hostReport(token, hostIp) {
+    if (!net.isIPv4(hostIp) || !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(hostIp)) {
+      throw Object.assign(new Error('Expected a private IPv4 address'), { status: 400 });
+    }
+    let valid = false;
+    for (const [k, exp] of this.helperTokens) {
+      if (typeof token === 'string' && safeEqual(k, token) && exp >= Date.now()) { this.helperTokens.delete(k); valid = true; break; }
+    }
+    if (!valid) throw Object.assign(new Error('Invalid or expired helper token'), { status: 403 });
+    const raw = { ...DEFAULTS, ...(readRaw() || {}) };
+    const cur = readRaw() || {};
+    writeRaw({ ...cur, publicHost: hostIp });
+    if (raw.https) generateCert(resolveFromRoot(raw.tlsCert), resolveFromRoot(raw.tlsKey), [hostIp]);
+    log.info(`Windows helper reported host PC address ${hostIp}; certificate renewed`);
+    setTimeout(() => this.restart(), 500); // after the response is sent
+    return { ok: true };
   }
 
   requireCatalog() {
@@ -55,7 +91,10 @@ class Runtime {
       this.sessions.ttl = cfg.sessionDays * 86_400_000;
       this.catalog = new Catalog(this.db, cfg.mediaDirs, { probe: media.probe, log });
       this.catalog.rescan();
-      this.handler = createApp({ cfg, catalog: this.catalog, sessions: this.sessions, progress: this.progress, limiter: this.limiter, log });
+      this.handler = createApp({
+        cfg, catalog: this.catalog, sessions: this.sessions, progress: this.progress, limiter: this.limiter, log,
+        helper: { download: () => this.windowsHelper(), report: (t, ip) => this.hostReport(t, ip) },
+      });
       const server = cfg.https
         ? https.createServer({ cert: fs.readFileSync(cfg.tlsCert), key: fs.readFileSync(cfg.tlsKey), minVersion: 'TLSv1.2' }, this.handler)
         : http.createServer(this.handler);
@@ -95,6 +134,7 @@ class Runtime {
   }
 
   async restart() {
+    if (this.closed) return;
     await this.stop();
     await this.start();
   }
@@ -115,6 +155,7 @@ class Runtime {
   }
 
   async close() {
+    this.closed = true;
     this.compactor.cancel();
     await this.stop();
     this.db.close();

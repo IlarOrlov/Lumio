@@ -76,7 +76,10 @@
   // Which optional codecs this device can decode; the server then streams
   // AV1/HEVC/VP9 files untouched instead of burning CPU on transcoding.
   var caps = (function () {
-    var tests = { av1: 'video/mp4; codecs="av01.0.08M.10"', hevc: 'video/mp4; codecs="hvc1.2.4.L120.90"', vp9: 'video/mp4; codecs="vp09.00.10.08"' };
+    var tests = {
+      av1: 'video/mp4; codecs="av01.0.08M.10"', hevc: 'video/mp4; codecs="hvc1.2.4.L120.90"', vp9: 'video/mp4; codecs="vp09.00.10.08"',
+      opus: 'audio/mp4; codecs="opus"', flac: 'audio/mp4; codecs="flac"',
+    };
     var v = document.createElement('video');
     return Object.keys(tests).filter(function (k) {
       try {
@@ -273,6 +276,10 @@
           } }, nameInput, h('button', { class: 'btn', type: 'submit' }, 'Rename'), msg),
           h('p', { class: 'muted', text: 'Hardware decoding: H.264' + (caps ? ', ' + caps.toUpperCase().split(',').join(', ') : '') })),
         h('section', { class: 'panel' }, h('h2', { text: 'Signed-in devices' }), devices),
+        h('section', { class: 'panel' }, h('h2', { text: 'Watch on other devices in your home' }),
+          h('p', { class: 'muted', text: 'Lumio runs in a virtual machine on your Windows PC. On that PC, download this helper and double-click it: it forwards the port, opens the firewall for your home network only, and tells Lumio the PC\'s address.' }),
+          h('a', { class: 'btn', href: '/api/windows-helper', download: 'Lumio-Windows-Setup.cmd' }, '⬇ Download Windows setup helper'),
+          h('p', { class: 'muted small', text: 'Windows will ask for administrator permission. If SmartScreen warns about an unknown file, choose "More info" → "Run anyway".' })),
         h('section', { class: 'panel' }, h('h2', { text: 'Library' }),
           h('button', { class: 'btn', onclick: function (e) {
             e.target.disabled = true;

@@ -196,6 +196,11 @@ function createAdmin(runtime, { keys, port }) {
       res.writeHead(200, { 'Content-Type': 'application/x-pem-file', 'Content-Disposition': 'attachment; filename="lumio.crt"' });
       return res.end(pem);
     }
+    if (m === 'GET' && p === '/api/windows-helper') {
+      const body = Buffer.from(runtime.windowsHelper());
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="Lumio-Windows-Setup.cmd"', 'Content-Length': body.length, 'Cache-Control': 'no-store' });
+      return res.end(body);
+    }
     if (m === 'POST' && p === '/api/server') {
       const b = await readJson(req);
       if (b.action === 'start') await runtime.start();
@@ -263,14 +268,14 @@ function createAdmin(runtime, { keys, port }) {
       runtime.requireCatalog();
       const b = await readJson(req);
       const minMb = Math.max(0, Number.isFinite(Number(b.minMb)) ? Number(b.minMb) : 50);
-      runtime.compactor.analyze(minMb * 1024 * 1024).catch((e) => { runtime.compactor.state.phase = 'idle'; runtime.compactor.state.error = e.message; });
+      runtime.compactor.analyze(minMb * 1024 * 1024, [40, 48, 64].includes(Number(b.audioKbps)) ? Number(b.audioKbps) : 48).catch((e) => { runtime.compactor.state.phase = 'idle'; runtime.compactor.state.error = e.message; });
       return sendJson(res, 202, { ok: true });
     }
     if (m === 'POST' && p === '/api/compact/start') {
       const b = await readJson(req, 64 * 1024);
       const opts = {
         ids: Array.isArray(b.ids) ? b.ids.filter((x) => /^[0-9a-f]{20}$/.test(x)) : [],
-        crf: b.crf, preset: b.preset,
+        crf: b.crf, preset: b.preset, audioKbps: b.audioKbps,
         audioLangs: String(b.audioLangs || '').split(',').map((x) => x.trim()).filter((x) => /^[a-z]{2,3}$/i.test(x)),
         mode: b.mode === 'copy' ? 'copy' : 'replace',
         outDir: b.mode === 'copy' ? validateMediaDir(String(b.outDir || '')) : null,

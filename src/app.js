@@ -22,7 +22,7 @@ function num(v, { min = 0, max = 1e7 } = {}) {
   return Number.isFinite(n) && n >= min && n <= max ? n : null;
 }
 
-function createApp({ cfg, catalog, sessions, progress, limiter, log = console }) {
+function createApp({ cfg, catalog, sessions, progress, limiter, log = console, helper = null }) {
   const isAllowedIp = createNetworkGuard(cfg.allowedNetworks);
   const isAllowedHost = createHostGuard(cfg.allowedHosts);
   const statics = loadStatic(path.join(__dirname, '..', 'public'));
@@ -180,6 +180,11 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console })
     const m = req.method;
 
     if (m === 'POST' && p === '/api/login') return login(req, res);
+    if (m === 'POST' && p === '/api/host-report' && helper) {
+      // Windows helper callback: authorised by its single-use token, not a cookie.
+      const body = await readJson(req, 1024);
+      return sendJson(res, 200, helper.report(body.token, String(body.hostIp || '')));
+    }
     if (m === 'GET' && p === '/lumio.crt' && cfg.https) {
       // Public certificate (not secret) so phones/TVs can install it as trusted.
       const pem = fs.readFileSync(cfg.tlsCert);
@@ -249,6 +254,14 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console })
       const ok = sessions.revokeDevice(body.id);
       if (body.id === session.deviceId) setSessionCookie(res, '', 0);
       return sendJson(res, ok ? 200 : 404, { ok });
+    }
+    if (m === 'GET' && p === '/api/windows-helper' && helper) {
+      const body = Buffer.from(helper.download());
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="Lumio-Windows-Setup.cmd"',
+        'Content-Length': body.length, 'Cache-Control': 'no-store',
+      });
+      return res.end(body);
     }
     if (m === 'POST' && p === '/api/rescan') {
       catalog.rescan();

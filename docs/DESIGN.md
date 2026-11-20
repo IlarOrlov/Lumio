@@ -112,6 +112,18 @@ Browser ─▶ admin console (loopback only) ─ exchanges key for a session coo
 | **Storage** | Analyze → choose files → AV1 compaction with live progress, speed, cancel and per-file results |
 | **Logs** | Live tail of the server log |
 
+**Windows setup helper (VMware NAT).** Phones can only reach a NAT'd VM through a port forward on
+the Windows host, which the VM can't configure itself. Lumio therefore generates
+`Lumio-Windows-Setup.cmd` (viewer *Settings*, or the admin console): a self-elevating batch file with
+embedded PowerShell. It edits `%ProgramData%\VMware\vmnetnat.conf` (`[incomingtcp]`, with a one-time
+backup), restarts the VMware NAT service, and adds a firewall rule limited to the Private profile and
+LocalSubnet. It offers to remove inbound *block* rules for `vmnat.exe` (they override allow rules) and
+to switch a Public home network to Private. Finally it POSTs the PC's LAN IP to `/api/host-report`
+with a **single-use, 2-hour token** baked into that download, over TLS **pinned to Lumio's
+certificate SHA-256**. Lumio then stores the address, renews its certificate for it and restarts
+streaming. Every value in the script is generated from validated data (IPv4 literal, integer port,
+hex fingerprint, base64url token); nothing user-supplied is interpolated.
+
 Settings apply immediately: `Runtime` restarts the streaming listener in-process. Device sessions
 and the database are untouched, so phones stay signed in.
 
@@ -180,35 +192,55 @@ can be made.
 
 ### 5.2 Making the library itself small — admin console → Storage
 
-The biggest saving is the codec. The Storage page (`src/compact.js`) re-encodes selected files to:
+#### First question: can the bytes be packed and rebuilt losslessly?
+
+Measured on a real 144 MB episode (H.264 + AAC in MP4):
+
+| Lossless method | Saving |
+|---|---|
+| zstd -19 --long=27 (whole file) | **2.0 %** |
+| xz -9e (first 40 MB, includes the MP4 index) | 4.2 % |
+
+Encoded video is entropy-coded: its bytes are already close to random, so general-purpose compressors
+find almost nothing. A "pack the bytes and rebuild them on play" store would save about 2 %, cost CPU
+on every play and make seeking harder. It isn't worth it. (Re-modelling the H.264 entropy coding
+losslessly, the way Lepton does for JPEG, is research-grade and not available as a robust tool.)
+
+The redundancy that *is* left in typical files is (a) audio coded at much higher bitrates than modern
+codecs need, (b) unused dub tracks, and (c) on high-bitrate sources, the video codec itself. So the
+Storage page picks a **plan per file**:
+
+| Plan | When | What happens | Measured |
+|---|---|---|---|
+| **Slim audio** | Video is already lean (< 0.06 bits/pixel/frame) but audio isn't | Video stream copied **bit-exact** (verified: identical MD5 of the video stream before/after). Audio re-encoded to Opus at 64 / **48** / 40 kb/s per stereo pair (never above 75 % of the source) | 144 MB → 122 MB (**-15.2 %**) at 48k, 25 s per episode (≈ 90× real-time); 70 episodes: 9.21 GB → ≈ 7.85 GB |
+| **AV1 re-encode** | Video ≥ 0.06 bits/pixel/frame (Blu-ray / web-dl / 1080p+ rips) | AV1 (SVT-AV1) + Opus, see below | 40–60 % smaller |
+| none | Lean video and Opus/low-bitrate audio | Listed as "already compact" | — |
+
+A plan is only offered if it saves at least 5 %.
+
+**AV1 settings:**
 
 | Choice | Why |
 |---|---|
-| **AV1 video (SVT-AV1)**, CRF 30, preset 6, 10-bit, film-grain synthesis | ~40–60 % smaller than H.264 and ~20–30 % smaller than HEVC at similar quality. Royalty-free, decoded in hardware by most phones, TVs and GPUs since ~2020, and in software by every current browser. 10-bit avoids banding and costs no extra space. Grain synthesis stops noisy film grain wasting bits. |
-| **Opus audio** (≤ 112 kb/s stereo, 48 kb/s per channel for 5.1/7.1, never above 75 % of the source track) | Transparent at roughly half the bitrate of AAC/AC3, and supported by every modern browser. DTS/TrueHD tracks are often 1.5–4 GB alone. |
-| **MP4 container with `+faststart`** | Direct-playable with HTTP Range, so the server does no work at playback. |
-| **Text subtitles → mov_text** | Kept inside the file, and still served to the player as WebVTT. |
-| **"Keep only these audio languages"** (e.g. `rus,eng`) | Drops dub tracks you never use. Often 0.5–1 GB per film. |
-| **Skip** files already AV1, under 50 MB, or below **0.06 bits/pixel** | Nothing to gain (see below). |
+| **AV1 video (SVT-AV1)**, CRF 30, preset 6, 10-bit, film-grain synthesis | ~40–60 % smaller than H.264 and ~20–30 % smaller than HEVC at similar quality. Royalty-free and widely hardware-decoded since ~2020. 10-bit avoids banding at no cost. Grain synthesis stops film grain wasting bits. |
+| **Opus audio** | Transparent at roughly half the bitrate of AAC/AC3. DTS/TrueHD tracks are often 1.5–4 GB alone. |
+| **MP4 container with `+faststart`** | Direct-playable with HTTP Range: zero server work at playback. |
+| **Text subtitles → mov_text** | Kept inside the file and served to the player as WebVTT. |
+| **"Keep only these audio languages"** (e.g. `rus,eng`) | Drops dub tracks you never use, often 0.5–1 GB per film. Tracks tagged `und` are always kept. |
 
-Rough sizes per hour of 1080p: H.264 BluRay remux 15–25 GB, typical H.264 rip 2–4 GB, AV1 CRF 30
-≈ 0.8–1.5 GB.
+**When AV1 does *not* pay off (measured):** the same 704×400 / 320 kb/s episode (≈ 0.05 bits/pixel)
+re-encoded to AV1 came out **8 % larger** at CRF 30 and only 11 % smaller at CRF 34, with visible
+softening. That's why low-bpp files get *Slim audio* instead.
 
-**When compaction does *not* pay off (measured):** a 704×400 H.264 episode at 320 kb/s
-(≈ 0.05 bits/pixel, 140 MB per 44 min) re-encoded to AV1 came out **8 % larger** at CRF 30 and only
-11 % smaller at CRF 34, with visible softening. Already heavily compressed SD sources leave AV1 nothing
-to remove. So the analyzer computes bits per pixel per frame and marks such files "already efficiently
-encoded" instead of offering them. AV1 shines on high-bitrate sources: Blu-ray rips, 1080p/4K files of
-several GB.
+**Playback of Opus files:** each device reports whether it can play Opus-in-MP4 (`caps=opus`).
+Devices that can get the file directly. Others get the video copied and the audio converted to AAC
+on the fly, which costs almost no CPU. Nothing becomes unplayable.
 
-**Safety:** analysis comes first (lists candidates and an estimate) and you pick the files. Each file
-is encoded to a hidden temp file, verified (duration within 2 s, smaller than the source) and only
-then moved into place. You choose either *Replace originals* or *Keep originals and write to another
-folder*. Watch progress follows the renamed file. Progress, speed and cancel are shown live.
-
-**Trade-offs:** encoding is slow on CPU (measured about 7× real-time for SD and roughly 1–2× for
-1080p on 8 cores, at preset 6), so it's best run overnight. Old devices without AV1 support fall back
-to server transcoding. Keep originals if any important device is older than ~2019.
+**Safety:** analysis first (per-file plan, current codecs, estimated size), you pick the files. Each
+file is encoded to a hidden temp file and verified: duration within 2 s, smaller than the source, and
+for Slim audio the video codec and size unchanged. Only then is it moved into place, either
+replacing the original or written to another folder. Watch progress follows renamed files. Live
+progress, speed and cancel.
 
 ### 5.3 Further storage ideas (not implemented)
 
@@ -240,6 +272,7 @@ resource exhaustion.
 | **Resource limits** | Concurrent transcodes capped (`maxTranscodes`). JSON bodies ≤ 16 KB. URL ≤ 2 KB. Header/request/keep-alive timeouts (slowloris). `maxConnections`. Only GET/HEAD/POST. |
 | **Headers** | nosniff, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`, COOP/CORP same-origin, restrictive Permissions-Policy, `noindex`. |
 | **Admin console isolation** | Separate listener bound to `127.0.0.1` only (never on the LAN); remote-address check as well. Unlocked by a 256-bit key that is **single-use and expires after 60 s**, issued only over an owner-only unix socket (so only the same OS user can get one). It briefly appears in the browser's command line, which other local users could read, but by then it's consumed or expired. It travels in the URL fragment (never sent in requests or logged) and is swapped for an `HttpOnly; SameSite=Strict` session cookie. POSTs need CSRF token + exact `Origin`; `Host` must be `127.0.0.1`/`localhost` (DNS rebinding). The password hash is never sent to the browser. Media folders can't be system directories; allowed networks can't be `0.0.0.0/0`. |
+| **Windows helper** | Download requires a signed-in device (viewer) or the admin console. The host-report endpoint accepts only a single-use, 2 h token and a private IPv4 address; the IP is validated before the token is consumed. The helper pins Lumio's certificate fingerprint, so it can't be tricked into reporting to another server. Firewall rule: Private profile and LocalSubnet only. |
 | **Least privilege** | Refuses to run as root. umask 077. The systemd unit adds `NoNewPrivileges`, `ProtectSystem=strict`, read-only media, private /tmp, syscall filtering, capability drop and address-family restriction. |
 | **Supply chain** | Zero npm runtime dependencies. Only Node built-ins (`node:sqlite`, `node:crypto`, …) and the distro's ffmpeg. |
 | **Secrets in a public repo** | `config/lumio.json`, `config/tls/` and `data/` are git-ignored. Only `lumio.example.json` is committed. |

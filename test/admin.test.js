@@ -96,6 +96,20 @@ test('admin console access control and first-run setup', async (t) => {
   assert.equal(fs.statSync(process.env.LUMIO_CONFIG).mode & 0o777, 0o600);
   assert.equal(raw.dataDir, path.join(TMP, 'data'), 'custom data dir preserved');
 
+  // Windows helper: download carries a single-use token; report sets the host IP + renews cert
+  const helper = a.runtime.windowsHelper();
+  const tok = /\$Token = '([A-Za-z0-9_-]+)'/.exec(helper)[1];
+  assert.throws(() => a.runtime.hostReport(tok, '8.8.8.8'), /private/);
+  assert.throws(() => a.runtime.hostReport('nope'.repeat(10), '192.168.1.50'), /token/);
+  const helper2 = a.runtime.windowsHelper();
+  const tok2 = /\$Token = '([A-Za-z0-9_-]+)'/.exec(helper2)[1];
+  assert.deepEqual(a.runtime.hostReport(tok2, '192.168.1.50'), { ok: true });
+  assert.throws(() => a.runtime.hostReport(tok2, '192.168.1.50'), /token/, 'single use');
+  const st2 = await a.call('/api/status');
+  assert.equal(st2.json.config.publicHost, '192.168.1.50');
+  assert.ok(st2.json.config.cert.sans.includes('192.168.1.50'));
+  await new Promise((r) => setTimeout(r, 900)); // let the deferred restart finish
+
   // stop / start
   await a.call('/api/server', { action: 'stop' });
   assert.equal((await a.call('/api/status')).json.running, false);

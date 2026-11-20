@@ -1,5 +1,6 @@
 'use strict';
 const { scanLibrary, buildShows, nextEpisode } = require('./library');
+const { PROBE_VERSION } = require('./media');
 
 /**
  * Holds the scanned library plus cached ffprobe results. Probing runs in the
@@ -42,10 +43,11 @@ class Catalog {
 
   cachedProbe(item) {
     const mem = this.probes.get(item.id);
-    if (mem && mem.size === item.size && mem.mtime === item.mtime) return mem.info;
+    if (mem && mem.size === item.size && mem.mtime === item.mtime && mem.info.v === PROBE_VERSION) return mem.info;
     const row = this.q.get.get(item.id);
     if (row && row.size === item.size && row.mtime === item.mtime) {
       const info = JSON.parse(row.info);
+      if (info.v !== PROBE_VERSION) return null;
       this.probes.set(item.id, { size: item.size, mtime: item.mtime, info });
       return info;
     }

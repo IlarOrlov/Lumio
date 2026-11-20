@@ -161,7 +161,50 @@ test('playback plan picks direct / remux / transcode, honouring device codecs', 
   assert.equal(playbackPlan(mp4, info('h264', 'ac3')).mode, 'remux');
   assert.equal(playbackPlan(mkv, info('hevc')).mode, 'transcode');
   assert.equal(playbackPlan(mkv, info('hevc'), 0, parseCaps('hevc')).mode, 'remux');
-  assert.equal(playbackPlan(mp4, info('av1', 'opus', 'yuv420p10le'), 0, parseCaps('av1')).mode, 'direct');
+  assert.equal(playbackPlan(mp4, info('av1', 'opus', 'yuv420p10le'), 0, parseCaps('av1,opus')).mode, 'direct');
+  assert.equal(playbackPlan(mp4, info('h264', 'opus')).mode, 'remux', 'Opus falls back to a cheap audio conversion');
+  assert.equal(playbackPlan(mp4, info('h264', 'opus'), 0, parseCaps('opus')).mode, 'direct');
   assert.equal(playbackPlan(mp4, info('h264', 'aac', 'yuv420p10le', 'High 10')).mode, 'transcode');
   assert.deepEqual([...parseCaps('av1,evil,hevc')], ['av1', 'hevc']);
+});
+
+test('compaction plan: AV1 only where it pays, slim audio for lean video', () => {
+  const { planFor, opusKbps } = require('../src/compact');
+  const sd = { size: 144e6 };
+  const sdInfo = { duration: 2634, video: { codec: 'h264', width: 704, height: 400 }, audio: [{ codec: 'aac', channels: 2, bitRate: 112000 }] };
+  const p1 = planFor(sd, sdInfo);
+  assert.equal(p1.plan, 'audio', 'lean SD video: keep picture, slim audio');
+  assert.ok(p1.estimate > 0.8 && p1.estimate < 0.9, `estimate ${p1.estimate}`);
+
+  const bluray = { size: 8e9 };
+  const brInfo = { duration: 7200, video: { codec: 'h264', width: 1920, height: 1080 }, audio: [{ codec: 'dts', channels: 6, bitRate: 1509000 }] };
+  assert.equal(planFor(bluray, brInfo).plan, 'av1');
+
+  const done = { size: 125e6 };
+  const doneInfo = { duration: 2634, video: { codec: 'h264', width: 704, height: 400 }, audio: [{ codec: 'opus', channels: 2, bitRate: 48000 }] };
+  assert.equal(planFor(done, doneInfo), null, 'already slimmed: nothing to do');
+
+  assert.equal(opusKbps({ channels: 2, bitRate: 112000 }, 48), 48);
+  assert.equal(opusKbps({ channels: 2, bitRate: 56000 }, 48), 42, 'never above 75% of source');
+  assert.equal(opusKbps({ channels: 6, bitRate: 640000 }, 64), 240);
+});
+
+test('Windows helper: CRLF batch with embedded PowerShell, validated inputs only', () => {
+  const { buildWindowsHelper } = require('../src/winhelper');
+  const fp = Array.from({ length: 32 }, () => 'AB').join(':');
+  const cmd = buildWindowsHelper({ vmIp: '192.168.204.128', port: 8443, https: true, fingerprint: fp, token: 'T'.repeat(43) });
+  assert.ok(!/[^\r]\n/.test(cmd), 'CRLF line endings for cmd.exe');
+  assert.match(cmd, /^@echo off\r\n/);
+  // the self-extraction offset must land exactly after the marker line
+  const i = cmd.lastIndexOf('#__LUMIO_PS__') + 13;
+  assert.match(cmd.slice(i), /^\r\n\$ErrorActionPreference = 'Stop'/);
+  assert.match(cmd, /"\$Port = \$\(\$VmIp\):\$Port"/);
+  assert.match(cmd, /-Profile Private -RemoteAddress LocalSubnet/);
+  assert.match(cmd, new RegExp(`LumioFp = '${fp}'`));
+  for (const bad of [
+    { vmIp: "1.2.3.4'; calc #", port: 8443, https: false, token: 'T'.repeat(43) },
+    { vmIp: '192.168.204.128', port: '8443; x', https: false, token: 'T'.repeat(43) },
+    { vmIp: '192.168.204.128', port: 8443, https: true, fingerprint: "AB'", token: 'T'.repeat(43) },
+    { vmIp: '192.168.204.128', port: 8443, https: false, token: "x'; y" },
+  ]) assert.throws(() => buildWindowsHelper(bad));
 });

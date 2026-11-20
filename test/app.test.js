@@ -21,7 +21,7 @@ async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'] } = {}) {
   fs.writeFileSync(path.join(lib, 'Show S01E01.mkv'), 'x');
   const db = openDb(':memory:');
   const catalog = new Catalog(db, [lib], {
-    probe: async () => ({ duration: 100, container: 'mp4', video: { codec: 'h264', profile: 'High', pixFmt: 'yuv420p', width: 1920, height: 1080 }, audio: [{ index: 0, codec: 'aac', channels: 2 }], subtitles: [] }),
+    probe: async () => ({ v: 2, duration: 100, container: 'mp4', video: { codec: 'h264', profile: 'High', pixFmt: 'yuv420p', width: 1920, height: 1080 }, audio: [{ index: 0, codec: 'aac', channels: 2, bitRate: 128000 }], subtitles: [] }),
     log: {},
   });
   catalog.rescan();

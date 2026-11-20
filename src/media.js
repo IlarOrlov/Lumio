@@ -38,6 +38,8 @@ function run(bin, args, { timeoutMs = 60_000, maxBytes = 8 * 1024 * 1024 } = {})
   });
 }
 
+// Bump when probe() output changes so cached results are refreshed.
+const PROBE_VERSION = 2;
 const TEXT_SUB_CODECS = new Set(['subrip', 'ass', 'ssa', 'webvtt', 'mov_text', 'text']);
 
 /** Runs ffprobe and reduces the output to what the player needs. */
@@ -53,6 +55,7 @@ async function probe(filePath) {
   const subs = streams.filter((s) => s.codec_type === 'subtitle');
   const tag = (s, k) => (s.tags && (s.tags[k] || s.tags[k.toUpperCase()])) || '';
   return {
+    v: PROBE_VERSION,
     duration: Number(data.format && data.format.duration) || 0,
     container: (data.format && data.format.format_name) || '',
     video: video ? {
@@ -71,7 +74,9 @@ async function probe(filePath) {
   };
 }
 
-const BROWSER_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
+// Every browser plays AAC/MP3 in MP4; Opus/FLAC-in-MP4 only where the device says so.
+const BROWSER_AUDIO = new Set(['aac', 'mp3']);
+const OPTIONAL_AUDIO = new Set(['opus', 'flac']);
 
 /**
  * Decides how a file reaches the browser:
@@ -82,7 +87,7 @@ const BROWSER_AUDIO = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
 // Codecs a client may report it can decode (via MediaSource/canPlayType).
 // H.264 8-bit is assumed universal; the rest are passed through untouched only
 // when the requesting device says it supports them.
-const OPTIONAL_CODECS = new Set(['av1', 'hevc', 'vp9']);
+const OPTIONAL_CODECS = new Set(['av1', 'hevc', 'vp9', 'opus', 'flac']);
 
 function parseCaps(str) {
   return new Set(String(str || '').split(',').map((s) => s.trim()).filter((s) => OPTIONAL_CODECS.has(s)));
@@ -93,7 +98,7 @@ function playbackPlan(item, info, audioIndex = 0, caps = new Set()) {
   const a = info.audio[audioIndex] || info.audio[0];
   const h264ok = v && v.codec === 'h264' && !/10|4:2:2|4:4:4/.test(v.profile) && !/10le|12le|422|444/.test(v.pixFmt);
   const videoOk = h264ok || (v && caps.has(v.codec) && !/422|444|12le/.test(v.pixFmt));
-  const audioOk = !a || BROWSER_AUDIO.has(a.codec);
+  const audioOk = !a || BROWSER_AUDIO.has(a.codec) || (OPTIONAL_AUDIO.has(a.codec) && caps.has(a.codec));
   const mp4ish = ['.mp4', '.m4v', '.mov'].includes(item.ext);
   const webmOk = item.ext === '.webm' && v && ['vp8', 'vp9', 'av1'].includes(v.codec) && (!a || ['opus', 'vorbis'].includes(a.codec));
 
@@ -170,4 +175,4 @@ async function thumbnail(item, durationSec, cacheDir) {
   return out;
 }
 
-module.exports = { checkFfmpeg, probe, playbackPlan, parseCaps, SAFE_INPUT, asInput, run, keyframeBefore, spawnStream, spawnSubtitles, thumbnail };
+module.exports = { PROBE_VERSION, checkFfmpeg, probe, playbackPlan, parseCaps, SAFE_INPUT, asInput, run, keyframeBefore, spawnStream, spawnSubtitles, thumbnail };

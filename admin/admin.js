@@ -394,8 +394,12 @@
           h('label', { class: 'check', style: 'margin-top:12px' }, https, h('span', null, h('strong', { text: 'Use HTTPS (recommended)' }), h('div', { class: 'hint', text: 'Encrypts the password and video traffic on your network. Turn off only for very old TVs.' }))),
           h('p', { class: 'hint', text: 'This virtual machine\'s address: ' + (c.vmIps.join(', ') || 'unknown') }), addrErr,
           h('button', { class: 'btn primary', onclick: function (e) { saveCfg(e.target, { publicHost: host.value, port: Number(port.value), https: https.checked }, addrErr); } }, 'Save & restart')),
-        h('div', { class: 'panel' }, h('h2', { text: 'Connect from your home network (VMware NAT)' }),
-          h('p', { class: 'muted', text: 'Do this once on the Windows PC so phones and TVs can reach Lumio:' }),
+        h('div', { class: 'panel hl' }, h('h2', { text: 'Connect from your home network (VMware NAT)' }),
+          h('p', { class: 'muted', text: 'Easiest: on the Windows PC open ' }, h('code', { text: c.url.replace(/\/\/[^:/]+/, '//' + (c.vmIps[0] || 'VM-IP')) }),
+            ', sign in, go to Settings and download the Windows setup helper. Double-click it and it does all of this automatically (and fills in the PC\'s address here).'),
+          h('div', { class: 'row' }, h('a', { class: 'btn', href: '/api/windows-helper', download: 'Lumio-Windows-Setup.cmd' }, '⬇ Download Windows setup helper'),
+            h('span', { class: 'hint', text: 'or download it here and copy it to Windows (VMware drag & drop / shared folder).' })),
+          h('h3', { text: 'Manual steps' }),
           h('ol', { class: 'steps' },
             h('li', null, 'In VMware Workstation open ', h('strong', { text: 'Edit → Virtual Network Editor' }), ' and click ', h('strong', { text: 'Change Settings' }), '.'),
             h('li', null, 'Select ', h('strong', { text: 'VMnet8 (NAT)' }), ' → ', h('strong', { text: 'NAT Settings…' }), ' → ', h('strong', { text: 'Add…' })),
@@ -438,7 +442,8 @@
   }
 
   // ---------- storage ----------
-  var compactOpts = { crf: 30, preset: 6, audioLangs: '', mode: 'replace', outDir: '', selected: null };
+  var compactOpts = { crf: 30, preset: 6, audioKbps: 48, audioLangs: '', mode: 'replace', outDir: '', selected: null };
+  var PLAN_LABEL = { audio: 'Slim audio · picture untouched', av1: 'AV1 re-encode' };
 
   function storage() {
     return refreshStatus().then(function (s) {
@@ -447,27 +452,33 @@
         pollTimer = setInterval(function () { if (page === 'storage') go('storage'); }, 2000);
       }
       var intro = h('div', { class: 'panel' }, h('h2', { text: 'Shrink your library' }),
-        h('p', { class: 'muted', text: 'Lumio never copies your videos and keeps no cache, so it uses almost no space itself. To save real space, it can re-encode files to AV1 video and Opus audio: usually 40–60% smaller with the same picture, and played directly by modern phones, TVs and browsers.' }),
-        h('p', { class: 'hint', text: 'Every file is checked after converting; if anything looks wrong the original is kept. Converting is slow (roughly real-time per file), so it\'s best left running overnight.' }));
+        h('p', { class: 'muted', text: 'Lumio never copies your videos and keeps no cache. To save real space it picks the cheapest method that actually works for each file:' }),
+        h('ul', { class: 'muted' },
+          h('li', null, h('strong', { text: 'Slim audio' }), ' — the video stream is kept bit-for-bit identical; only the audio is re-encoded to Opus. About 12–15% smaller, ~25 s per episode.'),
+          h('li', null, h('strong', { text: 'AV1 re-encode' }), ' — for high-bitrate files (Blu-ray / 1080p / 4K rips): 40–60% smaller. Slow; best overnight.')),
+        h('details', null, h('summary', { text: 'Why not just compress the bytes and rebuild them?' }),
+          h('p', { class: 'muted small', text: 'Measured on a real episode: zstd -19 saves 2.0%, xz -9e about 2–4%. Video is already compressed, so its bytes look random and can\'t be packed further losslessly — and unpacking would cost CPU on every play. The waste that\'s really left is audio bitrate and unused tracks, which is what Lumio removes.' })),
+        h('p', { class: 'hint', text: 'Every file is verified after converting (length, size, and for Slim audio that the video is unchanged); if anything looks wrong the original is kept.' }));
       var nodes = [h('div', { class: 'head' }, h('h1', { text: 'Storage' })), intro];
       if (!s.running) { nodes.push(h('div', { class: 'panel' }, h('p', { class: 'muted', text: 'Start streaming on the Overview page first.' }))); return nodes; }
 
       if (cp.phase === 'encoding' || (cp.phase === 'done' && cp.results.length)) {
         var cur = cp.current;
         var barSpan = h('span'); barSpan.style.width = (cur ? cur.percent : 100) + '%';
+        var okCount = cp.results.filter(function (r) { return r.ok; }).length;
         nodes.push(h('div', { class: 'panel hl' },
-          h('h2', { text: cp.phase === 'encoding' ? 'Converting…' : 'Finished' }),
-          cur ? h('p', null, h('strong', { text: cur.name }), h('span', { class: 'muted', text: '  (' + cur.index + ' of ' + cur.total + ')  ' + cur.percent.toFixed(1) + '%' + (cur.speed ? ' · ' + cur.speed : '') })) : null,
+          h('h2', { text: cp.phase === 'encoding' ? 'Converting…' : 'Finished: ' + okCount + ' file(s) converted' }),
+          cur ? h('p', null, h('strong', { text: cur.name }), h('span', { class: 'muted', text: '  (' + cur.index + ' of ' + cur.total + ', ' + PLAN_LABEL[cur.plan] + ')  ' + cur.percent.toFixed(1) + '%' + (cur.speed ? ' · ' + cur.speed : '') })) : null,
           h('div', { class: 'bar' }, barSpan),
           h('p', { style: 'margin-top:12px', text: 'Space saved so far: ' + bytes(cp.savedBytes) }),
           cp.error ? h('p', { class: 'err', text: cp.error }) : null,
-          h('div', { class: 'list' }, cp.results.map(function (r) {
+          h('div', { class: 'list' }, cp.results.slice().reverse().map(function (r) {
             return h('div', { class: 'item' }, h('span', { class: 'grow ellipsis', text: r.name }),
               r.ok ? h('span', { class: 'okmsg', text: bytes(r.before) + ' → ' + bytes(r.after) }) : h('span', { class: 'err', text: r.message }));
           })),
           cp.phase === 'encoding'
             ? h('button', { class: 'btn danger', onclick: function () { if (confirm('Cancel? The file being converted is discarded; finished files stay converted.')) api('/api/compact/cancel', {}).then(function () { go('storage'); }); } }, 'Cancel')
-            : h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/compact/analyze', { minMb: 50 })).then(function () { go('storage'); }); } }, 'Analyze again')));
+            : h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/compact/analyze', { minMb: 50, audioKbps: compactOpts.audioKbps })).then(function () { go('storage'); }); } }, 'Analyze again')));
         return nodes;
       }
 
@@ -476,15 +487,17 @@
         return nodes;
       }
 
-      var minMb = h('input', { type: 'number', value: '50', min: '0', style: 'max-width:120px' });
+      var minMb = h('input', { type: 'number', value: '50', min: '0', style: 'max-width:110px' });
+      var aq = h('select', { style: 'max-width:300px', onchange: function () { compactOpts.audioKbps = Number(aq.value); } },
+        [['64', 'Audio: high (64 kb/s Opus)'], ['48', 'Audio: compact (48 kb/s, recommended)'], ['40', 'Audio: smallest (40 kb/s, speech)']]
+          .map(function (o) { return h('option', { value: o[0], selected: String(compactOpts.audioKbps) === o[0] ? true : null }, o[1]); }));
       nodes.push(h('div', { class: 'panel' }, h('div', { class: 'row' },
-        h('button', { class: 'btn primary', onclick: function (e) { busy(e.target, api('/api/compact/analyze', { minMb: Number(minMb.value) })).then(function () { setTimeout(function () { go('storage'); }, 400); }).catch(function (er) { toast(er.message, true); }); } }, '🔍 Analyze library'),
-        h('span', { class: 'muted small', text: 'skip files smaller than' }), minMb, h('span', { class: 'muted small', text: 'MB' }))));
+        h('button', { class: 'btn primary', onclick: function (e) { compactOpts.selected = null; busy(e.target, api('/api/compact/analyze', { minMb: Number(minMb.value), audioKbps: compactOpts.audioKbps })).then(function () { setTimeout(function () { go('storage'); }, 400); }).catch(function (er) { toast(er.message, true); }); } }, '🔍 Analyze library'),
+        aq, h('span', { class: 'muted small', text: 'skip files under' }), minMb, h('span', { class: 'muted small', text: 'MB' }))));
 
       if (cp.phase === 'ready') {
         if (cp.alreadyCompact && cp.alreadyCompact.count) {
-          nodes.push(h('div', { class: 'panel' }, h('p', { class: 'okmsg', text: '✓ ' + cp.alreadyCompact.count + ' file(s) (' + bytes(cp.alreadyCompact.bytes) + ') are already efficiently encoded.' }),
-            h('p', { class: 'hint', text: 'Their bitrate is so low that converting would save little or nothing and would soften the picture, so Lumio leaves them alone.' })));
+          nodes.push(h('div', { class: 'panel' }, h('p', { class: 'okmsg', text: '✓ ' + cp.alreadyCompact.count + ' file(s) (' + bytes(cp.alreadyCompact.bytes) + ') are already as compact as they can usefully get.' })));
         }
         if (!cp.candidates.length) {
           nodes.push(h('div', { class: 'panel' }, h('p', { class: 'okmsg', text: 'Nothing to do: your library is already compact.' })));
@@ -493,18 +506,25 @@
         if (!compactOpts.selected) compactOpts.selected = cp.candidates.map(function (x) { return x.id; });
         var sel = compactOpts.selected;
         var total = h('strong');
+        var hasAv1 = cp.candidates.some(function (x) { return x.plan === 'av1'; });
         function updTotal() {
-          var sum = cp.candidates.filter(function (x) { return sel.indexOf(x.id) >= 0; }).reduce(function (a, x) { return a + x.size; }, 0);
-          total.textContent = sel.length + ' file(s), ' + bytes(sum) + ' → about ' + bytes(sum * 0.45) + '–' + bytes(sum * 0.6);
+          var chosen = cp.candidates.filter(function (x) { return sel.indexOf(x.id) >= 0; });
+          var sum = chosen.reduce(function (a, x) { return a + x.size; }, 0);
+          var est = chosen.reduce(function (a, x) { return a + x.estimatedSize; }, 0);
+          total.textContent = chosen.length + ' file(s): ' + bytes(sum) + ' → about ' + bytes(est) + ' (save ~' + bytes(sum - est) + ')';
         }
+        var allCb = h('input', { type: 'checkbox', checked: sel.length === cp.candidates.length, 'aria-label': 'Select all', onchange: function () {
+          sel.length = 0; if (allCb.checked) cp.candidates.forEach(function (x) { sel.push(x.id); });
+          Array.prototype.forEach.call(document.querySelectorAll('input[data-cid]'), function (c) { c.checked = allCb.checked; }); updTotal();
+        } });
         var rows = cp.candidates.map(function (x) {
-          var cb = h('input', { type: 'checkbox', checked: sel.indexOf(x.id) >= 0, onchange: function () {
+          var cb = h('input', { type: 'checkbox', 'data-cid': x.id, checked: sel.indexOf(x.id) >= 0, onchange: function () {
             var i = sel.indexOf(x.id); if (cb.checked && i < 0) sel.push(x.id); if (!cb.checked && i >= 0) sel.splice(i, 1); updTotal();
           } });
           return h('tr', null, h('td', null, cb), h('td', { class: 'ellipsis', text: x.name }),
-            h('td', { text: x.codec.toUpperCase() + (x.height ? ' ' + x.height + 'p' : '') }),
-            h('td', { class: 'muted small', text: x.imageSubs ? 'drops ' + x.imageSubs + ' picture-subtitle track(s)' : '' }),
-            h('td', { class: 'num', text: bytes(x.size) }));
+            h('td', { class: 'small', text: PLAN_LABEL[x.plan] }),
+            h('td', { class: 'muted small', text: x.codec.toUpperCase() + (x.height ? ' ' + x.height + 'p' : '') + ' · ' + x.audio + (x.imageSubs ? ' · drops ' + x.imageSubs + ' picture subs' : '') }),
+            h('td', { class: 'num', text: bytes(x.size) + ' → ~' + bytes(x.estimatedSize) }));
         });
         updTotal();
         var crfLabel = h('span');
@@ -518,16 +538,16 @@
         var rReplace = h('input', { type: 'radio', name: 'mode', checked: compactOpts.mode === 'replace', onchange: function () { compactOpts.mode = 'replace'; } });
         var rCopy = h('input', { type: 'radio', name: 'mode', checked: compactOpts.mode === 'copy', onchange: function () { compactOpts.mode = 'copy'; } });
         var err = h('p', { class: 'err' });
-        nodes.push(h('div', { class: 'panel' }, h('h2', { text: 'Files that can shrink' }),
-          h('table', null, h('tr', null, h('th'), h('th', { text: 'File' }), h('th', { text: 'Now' }), h('th'), h('th', { class: 'num', text: 'Size' })), rows),
+        nodes.push(h('div', { class: 'panel' }, h('h2', { text: 'Files that can shrink (' + cp.candidates.length + ')' }),
+          h('table', null, h('tr', null, h('th', null, allCb), h('th', { text: 'File' }), h('th', { text: 'Method' }), h('th', { text: 'Now' }), h('th', { class: 'num', text: 'Size' })), rows),
           h('p', { style: 'margin-top:12px' }, 'Selected: ', total)));
         nodes.push(h('div', { class: 'panel' }, h('h2', { text: 'Options' }),
           h('div', { class: 'grid2' },
-            field(h('span', null, 'Quality: ', crfLabel), crf),
-            field('Speed', preset),
-            field('Keep only these audio languages', langs, 'Language codes, comma separated. Removing unused dubs saves a lot.')),
+            hasAv1 ? field(h('span', null, 'AV1 quality: ', crfLabel), crf) : null,
+            hasAv1 ? field('AV1 speed', preset) : null,
+            field('Keep only these audio languages', langs, 'Language codes, comma separated. Tracks marked "und" (unknown) are always kept.')),
           h('h3', { text: 'What to do with the originals' }),
-          h('label', { class: 'check' }, rReplace, h('span', null, h('strong', { text: 'Replace originals' }), h('div', { class: 'hint', text: 'Frees the space. Each original is deleted only after its new version is verified.' }))),
+          h('label', { class: 'check' }, rReplace, h('span', null, h('strong', { text: 'Replace originals' }), h('div', { class: 'hint', text: 'Frees the space. Each original is deleted only after its new version is verified. Watch progress is kept.' }))),
           h('label', { class: 'check', style: 'margin-top:8px' }, rCopy, h('span', null, h('strong', { text: 'Keep originals, save new files to another folder' }),
             h('div', { class: 'row', style: 'margin-top:6px' }, h('button', { class: 'btn sm', onclick: function (e) {
               e.preventDefault(); pickFolder(compactOpts.outDir).then(function (p) { if (p) { compactOpts.outDir = p; outLabel.textContent = p; rCopy.checked = true; compactOpts.mode = 'copy'; } });
@@ -537,7 +557,7 @@
             if (!sel.length) { err.textContent = 'Select at least one file.'; return; }
             if (compactOpts.mode === 'copy' && !compactOpts.outDir) { err.textContent = 'Choose the output folder.'; return; }
             if (compactOpts.mode === 'replace' && !confirm('Convert ' + sel.length + ' file(s) and replace the originals once verified?')) return;
-            busy(e.target, api('/api/compact/start', { ids: sel, crf: compactOpts.crf, preset: compactOpts.preset, audioLangs: compactOpts.audioLangs, mode: compactOpts.mode, outDir: compactOpts.outDir }))
+            busy(e.target, api('/api/compact/start', { ids: sel, crf: compactOpts.crf, preset: compactOpts.preset, audioKbps: compactOpts.audioKbps, audioLangs: compactOpts.audioLangs, mode: compactOpts.mode, outDir: compactOpts.outDir }))
               .then(function () { compactOpts.selected = null; setTimeout(function () { go('storage'); }, 500); }).catch(function (er) { err.textContent = er.message; });
           } }, '🗜 Start converting')));
       }

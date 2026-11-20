@@ -16,8 +16,8 @@ Set up and run entirely from a desktop icon and a web admin console, with no ter
 - **Locked down.** HTTPS, scrypt, hashed session tokens, CSRF + Origin checks, strict CSP, LAN-only
   allowlist, DNS-rebinding guard, loopback-only admin console, sandboxed ffmpeg.
   [Details →](docs/DESIGN.md#6-security-model)
-- **Storage-efficient.** Plays files in place with no copies or disk cache. Optional AV1 compaction
-  that skips files where it wouldn't pay off. [Details →](docs/DESIGN.md#5-storage-efficiency)
+- **Storage-efficient.** Plays files in place with no copies or disk cache. *Slim audio* shrinks
+  files ~15 % with the video stream kept bit-exact; AV1 re-encode for high-bitrate files. [Details →](docs/DESIGN.md#5-storage-efficiency)
 - **Zero npm dependencies.** Just Node.js ≥ 22.13 and ffmpeg.
 
 ## Install (Ubuntu desktop, one time)
@@ -55,8 +55,19 @@ Optional `poster.jpg` in a folder is used as its cover.
 
 ## Running inside a VMware VM (NAT)
 
-With the VM on **NAT**, other devices can't reach the VM directly. The admin console
-(*Network & Security*) shows these steps with your actual addresses filled in:
+With the VM on **NAT**, other devices can't reach the VM directly, so the Windows PC has to forward
+a port. **Automatic (recommended):** on the Windows PC open `https://<VM-IP>:8443` (the VM's
+address is shown in the admin console), sign in, go to **Settings → Download Windows setup helper**
+and double-click `Lumio-Windows-Setup.cmd`. After asking for admin rights it:
+
+- adds the VMware NAT port forward and restarts the VMware NAT service
+- adds a firewall rule for **Private networks and your local subnet only**
+- offers to remove old "block" rules for VMware NAT and to switch your Wi-Fi to *Private*
+- detects the PC's home-network IP and reports it to Lumio (single-use token, TLS pinned to Lumio's
+  certificate), so Lumio's address and certificate update automatically
+- prints the address to open on your phone
+
+**Manual alternative** (also shown in the admin console with your addresses filled in):
 
 1. **VMware Workstation → Edit → Virtual Network Editor → Change Settings → VMnet8 (NAT) →
    NAT Settings… → Add**: host port `8443`, TCP, VM IP (shown in the console), VM port `8443`.
