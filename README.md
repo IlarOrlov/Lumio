@@ -118,7 +118,7 @@ cups-browsed) and tightens kernel network settings. Undo with `--undo`.
 ## For developers
 
 ```bash
-npm test     # 27 tests: security pipeline, TLS/CA, mDNS, per-device progress, admin console, parsing
+npm test     # 29 tests: security pipeline, TLS/CA, mDNS, admin devices, intro detection, progress, admin console
 npm start    # run in the foreground instead of via the launcher
 ```
 
