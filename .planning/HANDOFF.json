@@ -1,0 +1,44 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-11-21T03:48:33+02:00",
+  "phase": null,
+  "phase_name": null,
+  "phase_dir": null,
+  "plan": null,
+  "task": null,
+  "total_tasks": null,
+  "status": "paused",
+  "context": "default (no GSD phase/spike/sketch; work was done directly in the repo)",
+  "completed_tasks": [
+    {"id": 1, "name": "Core server: auth, sessions, per-device progress, playback plans (direct/remux/transcode), strict security pipeline", "status": "done", "commit": "1bfb201"},
+    {"id": 2, "name": "Desktop launcher (systemd --user) + loopback-only web admin console", "status": "done", "commit": "3494e2f"},
+    {"id": 3, "name": "Admin unlock via single-use 60s keys over owner-only unix socket", "status": "done", "commit": "bb50e0c"},
+    {"id": 4, "name": "Slim-audio / AV1 compaction (per-file plan) + Windows helper for VMware NAT access", "status": "done", "commit": "d894f1c"},
+    {"id": 5, "name": "Viewer-downloaded helpers only propose the host address; admin confirms; SAN merge", "status": "done", "commit": "3d1519a"},
+    {"id": 6, "name": "Slim-audio applied to the user's 70-episode library via admin UI (70/70 OK, ~9.2 GiB -> ~7.9 GiB, video bit-exact)", "status": "done", "commit": null}
+  ],
+  "remaining_tasks": [
+    {"id": 7, "name": "Real-world check of Lumio-Windows-Setup.cmd on the Windows host", "status": "not_started"},
+    {"id": 8, "name": "Phone/TV access test through VMware NAT using the Windows host LAN IP", "status": "not_started"},
+    {"id": 9, "name": "README test count says 23; actual is 26 (cosmetic doc fix)", "status": "not_started"}
+  ],
+  "blockers": [
+    {"description": "PowerShell part of the Windows helper never syntax-checked or executed (pwsh download was denied by auto-mode classifier; not circumvented)", "type": "external", "workaround": "Manual review done; script is ASCII-only. User runs it on Windows and reports any error text."}
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {"action": "On Windows: open https://192.168.204.128:8443, sign in, Settings -> Download Windows setup helper, run it (UAC)", "context": "Only the Windows host can add the VMware NAT port forward and firewall rule", "blocking": true},
+    {"action": "In the admin console (Lumio desktop icon) Overview: click Apply on the pending host address", "context": "Viewer-issued helper tokens only propose the address", "blocking": true},
+    {"action": "Open https://<Windows-LAN-IP>:8443 on a phone and sign in", "context": "End-to-end proof of subnet access", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "No lossless byte-packing of video files", "rationale": "Measured zstd -19 ~2%, xz -9e ~4.2% on already-compressed video; not worth CPU/complexity"},
+    {"decision": "Per-file compaction plan: AV1 if >=0.06 bpp, else Slim audio (Opus 64/48/40k, video copied bit-exact); offered only if >=5% saving", "rationale": "AV1 made a 0.05 bpp SD source 8% bigger; audio was the only real waste"},
+    {"decision": "Adapt files to Lumio, not Lumio to files", "rationale": "User instruction; parser changes reverted, files renamed instead"},
+    {"decision": "Viewer-issued Windows-helper tokens only propose a host IP; admin-issued tokens auto-apply", "rationale": "Security review: a household device must not change server config"},
+    {"decision": "Zero npm dependencies (Node >=22.13 node:sqlite + ffmpeg)", "rationale": "Minimal attack surface and footprint"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Wait for the user's result from running the Windows helper; if it errors, fix src/winhelper.js from the reported message, re-run npm test, commit (no co-author line) and push.",
+  "context_notes": "Project is feature-complete for the user's last request. Live service 'lumio' (systemd --user) is active on the VM with the latest commit. Repo is public: never commit config/lumio.json, config/tls/, data/. Commits must carry no Co-Authored-By/AI attribution. Test helpers (puppeteer-core + Brave) live in the session scratchpad, which may be gone."
+}
