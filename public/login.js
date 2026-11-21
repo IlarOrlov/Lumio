@@ -6,6 +6,11 @@
   var device = document.getElementById('device');
   var presets = document.getElementById('presets');
 
+  // Back from the plain-form sign-in (no script)? Show why, and keep the address bar clean.
+  var e = /[?&]e=(wrong|locked)/.exec(location.search);
+  if (e) err.textContent = e[1] === 'locked' ? 'Too many failed attempts. Wait a minute and try again.' : 'That password doesn\'t match. Use the household password from Lumio\'s setup.';
+  if (location.search && window.history && history.replaceState) history.replaceState(null, '', '/login');
+
   if (window.LumioFX) {
     var stage = LumioFX.beam(document.getElementById('room'), { power: 1 });
     LumioFX.tilt();

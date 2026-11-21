@@ -237,3 +237,20 @@ test('old TV browsers: compat script and a variable-free stylesheet are served',
   const index = await req(base, '/');
   assert.ok(index.text.indexOf('/compat.js') < index.text.indexOf('/app.js'), 'compat loads before the app');
 });
+
+test('plain HTML form sign-in works without scripts and never puts the password in a URL', async (t) => {
+  const { server, base } = await setup();
+  t.after(() => server.close());
+  const post = (body) => fetch(base + '/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: base }, body });
+  const bad = await post('password=nope&device=TV');
+  assert.equal(bad.status, 303);
+  assert.equal(bad.headers.get('location'), '/login?e=wrong');
+  const ok = await post(`password=${encodeURIComponent(PASSWORD)}&device=Living+room+TV`);
+  assert.equal(ok.status, 303);
+  assert.equal(ok.headers.get('location'), '/');
+  const cookie = ok.headers.get('set-cookie').split(';')[0];
+  const me = await req(base, '/api/me', { cookie });
+  assert.equal(me.json.deviceName, 'Living room TV');
+  const evil = await fetch(base + '/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://evil.example' }, body: 'password=x&device=y' });
+  assert.equal(evil.status, 403, 'cross-site form posts refused');
+});

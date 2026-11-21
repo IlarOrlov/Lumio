@@ -4,7 +4,7 @@ const path = require('node:path');
 const { verifyPassword, safeEqual } = require('./auth');
 const { createNetworkGuard, createHostGuard } = require('./netguard');
 const {
-  securityHeaders, parseCookies, sendJson, sendError, readJson, loadStatic, sendFileRange, MIME,
+  securityHeaders, parseCookies, sendJson, sendError, readJson, readForm, loadStatic, sendFileRange, MIME,
 } = require('./http-util');
 const media = require('./media');
 const { caPaths } = require('./tls');
@@ -60,26 +60,41 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
 
   // ---------- handlers ----------
 
-  async function login(req, res) {
+  /** Checks the household password and creates the device session. */
+  async function signIn(req, res, password, deviceName) {
     const wait = limiter.retryAfterMs();
     if (wait > 0) {
       res.setHeader('Retry-After', Math.ceil(wait / 1000));
-      return sendError(res, 429, `Too many failed attempts. Try again in ${Math.ceil(wait / 60000)} min.`);
+      return { status: 429, error: `Too many failed attempts. Try again in ${Math.ceil(wait / 60000)} min.` };
     }
-    const body = await readJson(req, 2048);
-    const password = typeof body.password === 'string' ? body.password.slice(0, 256) : '';
+    password = typeof password === 'string' ? password.slice(0, 256) : '';
     const ok = password.length > 0 && await verifyPassword(password, cfg.passwordHash);
     if (!ok) {
       limiter.recordFailure();
       log.warn?.(`[lumio] failed login from ${req.socket.remoteAddress}`);
-      return sendError(res, 401, 'Wrong password');
+      return { status: 401, error: 'Wrong password' };
     }
     limiter.recordSuccess();
-    const name = cleanName(body.deviceName) || 'Unnamed device';
+    const name = cleanName(deviceName) || 'Unnamed device';
     const { token, deviceId } = sessions.createDeviceSession(name, req.headers['user-agent']);
     setSessionCookie(res, token, cfg.sessionDays * 86400);
     log.info?.(`[lumio] new device signed in: "${name}"`);
-    return sendJson(res, 200, { ok: true, deviceId });
+    return { status: 200, deviceId };
+  }
+
+  async function login(req, res) {
+    const body = await readJson(req, 2048);
+    const r = await signIn(req, res, body.password, body.deviceName);
+    return r.status === 200 ? sendJson(res, 200, { ok: true, deviceId: r.deviceId }) : sendError(res, r.status, r.error);
+  }
+
+  /** Plain HTML form post (browsers where the sign-in script can't run, e.g. older TVs). */
+  async function formLogin(req, res) {
+    const form = await readForm(req, 2048);
+    const r = await signIn(req, res, form.get('password'), form.get('device'));
+    const to = r.status === 200 ? '/' : `/login?e=${r.status === 429 ? 'locked' : 'wrong'}`;
+    res.writeHead(303, { Location: to, 'Cache-Control': 'no-store' });
+    return res.end();
   }
 
   function libraryView() {
@@ -188,6 +203,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
     const m = req.method;
 
     if (m === 'POST' && p === '/api/login') return login(req, res);
+    if (m === 'POST' && p === '/login') return formLogin(req, res);
     if (m === 'POST' && p === '/api/host-report' && helper) {
       // Windows helper callback: authorised by its single-use token, not a cookie.
       const body = await readJson(req, 1024);
@@ -321,6 +337,13 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
 
   async function handler(req, res) {
     securityHeaders(res, cfg);
+    if (cfg.logRequests) {
+      // Diagnostics (off by default): path only, never the query string or body.
+      res.on('finish', () => {
+        const path = String(req.url || '').split('?')[0].slice(0, 120);
+        log.info?.(`[req] ${req.method} ${path} ${res.statusCode} ${req.socket.remoteAddress} origin=${req.headers.origin || '-'} ua=${String(req.headers['user-agent'] || '').slice(0, 140)}`);
+      });
+    }
     try {
       if (!isAllowedIp(req.socket.remoteAddress)) {
         log.warn?.(`[lumio] blocked request from ${req.socket.remoteAddress}`);

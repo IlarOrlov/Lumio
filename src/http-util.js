@@ -91,6 +91,23 @@ function readJson(req, limit = 16 * 1024) {
   });
 }
 
+/** Reads an application/x-www-form-urlencoded body (plain HTML form posts). */
+function readForm(req, limit = 4096) {
+  return new Promise((resolve, reject) => {
+    const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    if (type !== 'application/x-www-form-urlencoded') { reject(Object.assign(new Error('Form required'), { status: 415 })); return; }
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { reject(Object.assign(new Error('Body too large'), { status: 413 })); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(new URLSearchParams(Buffer.concat(chunks).toString('utf8'))));
+    req.on('error', reject);
+  });
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
@@ -147,4 +164,4 @@ function sendFileRange(req, res, filePath, size, type) {
   fs.createReadStream(filePath, { start, end }).on('error', () => res.destroy()).pipe(res);
 }
 
-module.exports = { securityHeaders, parseCookies, sendJson, sendError, readJson, loadStatic, sendFileRange, MIME };
+module.exports = { securityHeaders, parseCookies, sendJson, sendError, readJson, readForm, loadStatic, sendFileRange, MIME };
