@@ -11,6 +11,9 @@ Set up and run entirely from a desktop icon and a web admin console, with no ter
   served directly, MKVs are remuxed on the fly, and only unplayable codecs get transcoded.
 - **Every device remembers.** Open Lumio and "Continue watching on *Living room TV*" is the first
   thing you see. Finished an episode? The next one is waiting as *Up next*, with auto-play.
+- **Skip intro.** Lumio compares the audio of episodes in each season, finds the parts that repeat
+  (title sequence, studio logo, opening theme) and shows a *Skip intro* button. Adjust any episode
+  in the admin console (Library → Skip intro).
 - **Point-and-click admin console.** Setup wizard, folder picker, devices and their history,
   network and certificate settings, autostart, storage compaction and logs.
 - **Found by name.** Devices open `https://lumio.local:8443`, which keeps working when the IP

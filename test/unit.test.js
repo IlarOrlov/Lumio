@@ -254,3 +254,46 @@ test('mDNS: answers A queries for exactly our name, legacy unicast echoes the qu
   r.onMessage(buildResponse('lumio.local', ['192.168.1.99']), { address: '192.168.1.99', port: 5353 });
   assert.equal(r.status().conflict.ip, '192.168.1.99');
 });
+
+test('intros: finds a shared segment at different offsets; needs support from 2+ episodes; validates manual input', async () => {
+  const { matchRuns, segmentsFrom, cleanSegments, STEP, IntroDetector } = require('../src/intros');
+  const { openDb } = require('../src/db');
+  let seed = 7; // mulberry32: good bits everywhere (an LCG's low bits repeat and fake matches)
+  const rnd = () => { seed = (seed + 0x6d2b79f5) >>> 0; let t = seed; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return (t ^ (t >>> 14)) >>> 0; };
+  const noise = (n) => Array.from({ length: n }, rnd);
+  const intro = noise(Math.round(40 / STEP)); // a 40 s "title sequence"
+  const ep = (before, total) => Uint32Array.from([...noise(Math.round(before / STEP)), ...intro.map((v) => v ^ (rnd() & 0x3)), ...noise(Math.round(total / STEP))]);
+  const a = ep(30, 120); const b = ep(95, 60);
+  const runs = matchRuns(a, b);
+  assert.ok(runs.length >= 1);
+  const best = runs.sort((x, y) => (y.aEnd - y.aStart) - (x.aEnd - x.aStart))[0];
+  assert.ok(Math.abs(best.aStart - 30) < 1 && Math.abs(best.aEnd - 70) < 1, `a: ${best.aStart}-${best.aEnd}`);
+  assert.ok(Math.abs(best.bStart - 95) < 1 && Math.abs(best.bEnd - 135) < 1, `b: ${best.bStart}-${best.bEnd}`);
+  assert.equal(matchRuns(Uint32Array.from(noise(800)), Uint32Array.from(noise(800))).length, 0, 'unrelated audio: nothing');
+
+  // one other episode is not enough; two are
+  assert.deepEqual(segmentsFrom([{ start: 30, end: 70, other: 1 }]), []);
+  assert.deepEqual(segmentsFrom([{ start: 30, end: 70, other: 1 }, { start: 30.4, end: 69.8, other: 2 }, { start: 29.9, end: 70.2, other: 2 }]), [{ start: 30, end: 70 }]);
+
+  assert.deepEqual(cleanSegments([{ start: 178.24, end: 187.1 }, { start: 0, end: 14 }], 2700), [{ start: 0, end: 14 }, { start: 178.2, end: 187.1 }]);
+  for (const bad of [[{ start: 10, end: 5 }], [{ start: 0, end: 10 }, { start: 5, end: 20 }], [{ start: 0, end: 9999 }], 'x', [{}, {}, {}, {}]]) {
+    assert.throws(() => cleanSegments(bad, 2700));
+  }
+
+  // full run over a fake season: auto results stored, manual results kept
+  const db = openDb(':memory:');
+  const eps = [1, 2, 3, 4].map((n) => ({ id: String(n).padStart(20, '0'), season: 1, episode: n, showKey: 'f'.repeat(16), size: 1, mtime: 1 }));
+  const fps = [ep(20, 100), ep(60, 80), ep(5, 120), ep(40, 90)];
+  const catalog = { shows: new Map([['f'.repeat(16), { key: 'f'.repeat(16), name: 'Test', episodes: eps }]]), cachedProbe: () => ({ duration: 2700 }) };
+  const det = new IntroDetector({ db, catalog: () => catalog, log: {} });
+  det.fingerprint = async (item) => fps[item.episode - 1];
+  det.setManual(eps[3], [{ start: 1, end: 2 }]);
+  await det.detectShow('f'.repeat(16));
+  const s1 = det.get(eps[0].id);
+  assert.equal(s1.source, 'auto');
+  assert.ok(Math.abs(s1.segments[0].start - 20) < 1 && Math.abs(s1.segments[0].end - 60) < 1, JSON.stringify(s1));
+  assert.ok(Math.abs(det.get(eps[2].id).segments[0].start - 5) < 1);
+  assert.deepEqual(det.get(eps[3].id), { segments: [{ start: 1, end: 2 }], source: 'manual', updatedAt: det.get(eps[3].id).updatedAt }, 'manual kept');
+  assert.equal(det.applyToSeason(eps[0]), 4);
+  assert.equal(det.get(eps[2].id).source, 'manual');
+});

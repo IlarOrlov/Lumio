@@ -326,7 +326,11 @@
           if (confirm('Stop showing videos from ' + d + '? (Files are not deleted.)')) saveDirs(c.mediaDirs.filter(function (x) { return x !== d; }));
         } }, 'Remove'));
     }));
-    return api('/api/library').catch(function () { return { movies: [], shows: [] }; }).then(function (lib) {
+    return Promise.all([
+      api('/api/library').catch(function () { return { movies: [], shows: [] }; }),
+      api('/api/intros').catch(function () { return null; }),
+    ]).then(function (res) {
+      var lib = res[0];
       return [
         h('div', { class: 'head' }, h('h1', { text: 'Library' }),
           h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/rescan', {})).then(function (l) { toast('Found ' + l.movies + ' movies, ' + l.shows + ' series'); go('library'); }).catch(function (er) { toast(er.message, true); }); } }, 'Rescan now')),
@@ -340,6 +344,7 @@
               h('li', null, 'Series: ', h('code', { text: 'Series/Dark/Season 1/Dark S01E01.mkv' })),
               h('li', null, 'Subtitles next to the video: ', h('code', { text: 'Dark S01E01.ru.srt' })),
               h('li', null, 'Optional cover image in the folder: ', h('code', { text: 'poster.jpg' }))))),
+        res[1] ? introsPanel(res[1]) : null,
         h('div', { class: 'panel' }, h('h2', { text: 'Series (' + lib.shows.length + ')' }),
           lib.shows.length ? h('table', null, h('tr', null, h('th', { text: 'Name' }), h('th', { class: 'num', text: 'Seasons' }), h('th', { class: 'num', text: 'Episodes' }), h('th', { class: 'num', text: 'Size' })),
             lib.shows.map(function (s) { return h('tr', null, h('td', { text: s.name }), h('td', { class: 'num', text: String(s.seasons) }), h('td', { class: 'num', text: String(s.episodes) }), h('td', { class: 'num', text: bytes(s.size) })); }))
@@ -350,6 +355,76 @@
             : h('p', { class: 'muted', text: 'No movies found yet.' })),
       ];
     });
+  }
+
+  // ---------- intro skipping ----------
+  function clock(s) {
+    s = Math.max(0, Math.round(s * 10) / 10);
+    var m = Math.floor(s / 60), sec = s - m * 60;
+    var ss = (sec < 10 ? '0' : '') + (Math.round(sec * 10) % 10 ? sec.toFixed(1) : String(Math.round(sec)));
+    return m + ':' + ss;
+  }
+  function segText(segs) { return (segs || []).map(function (x) { return clock(x.start) + '-' + clock(x.end); }).join(', '); }
+  /** "0:00-0:14, 2:58-3:07" -> [{start, end}] (also accepts h:mm:ss and plain seconds). */
+  function parseSegs(text) {
+    var t = text.trim();
+    if (!t) return [];
+    return t.split(',').map(function (part) {
+      var m = /^\s*([\d:.]+)\s*[-–]\s*([\d:.]+)\s*$/.exec(part);
+      if (!m) throw new Error('Write segments like 0:00-0:14, 2:58-3:07');
+      var sec = function (v) { return v.split(':').reduce(function (acc, x) { var n = Number(x); if (!isFinite(n)) throw new Error('Invalid time: ' + v); return acc * 60 + n; }, 0); };
+      return { start: sec(m[1]), end: sec(m[2]) };
+    });
+  }
+  function introsPanel(data) {
+    var st = data.status;
+    var busyNow = st.phase !== 'idle' || st.queued > 0;
+    if (busyNow) pollTimer = setInterval(function () { if (page === 'library') go('library'); }, 3000);
+    var line = busyNow
+      ? 'Looking for intros in ' + (st.show || 'your series') + ' (' + st.done + ' of ' + st.total + ' episodes' + (st.phase === 'comparing' ? ', comparing' : '') + ')…'
+      : 'Lumio compares the audio of episodes in each season and marks parts that repeat (title sequence, studio logo, opening theme). Viewers then get a Skip intro button. New episodes are checked automatically.';
+    var shows = data.shows.map(function (sh) {
+      var withIntro = sh.episodes.filter(function (e) { return e.segments && e.segments.length; }).length;
+      var pending = sh.episodes.filter(function (e) { return !e.source; }).length;
+      var seasons = [];
+      sh.episodes.forEach(function (e) { if (seasons.indexOf(e.season) < 0) seasons.push(e.season); });
+      var tables = seasons.map(function (sn) {
+        return h('div', null, h('h3', { text: 'Season ' + sn }), h('table', null,
+          h('tr', null, h('th', { text: 'Ep' }), h('th', { text: 'Skip these parts' }), h('th', { text: '' }), h('th', { text: '' })),
+          sh.episodes.filter(function (e) { return e.season === sn; }).map(function (e) {
+            var input = h('input', { type: 'text', value: segText(e.segments), placeholder: e.source ? 'no intro' : 'not checked yet', spellcheck: 'false', 'aria-label': 'Skip segments for episode ' + e.episode });
+            var srcPill = h('span', { class: 'pill ' + (e.source === 'manual' ? 'warn' : e.source ? 'ok' : 'off'), text: e.source === 'manual' ? 'Manual' : e.source ? 'Auto' : 'Pending' });
+            function save(btn) {
+              var segs;
+              try { segs = parseSegs(input.value); } catch (er) { toast(er.message, true); return; }
+              busy(btn, api('/api/intros/set', { id: e.id, segments: segs })).then(function (r) { input.value = segText(r.segments); srcPill.className = 'pill warn'; srcPill.textContent = 'Manual'; toast('Saved for episode ' + e.episode); }).catch(function (er) { toast(er.message, true); });
+            }
+            input.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') save(input); });
+            return h('tr', null,
+              h('td', { class: 'num', text: String(e.episode) }),
+              h('td', null, input),
+              h('td', null, srcPill),
+              h('td', null, h('div', { class: 'row' },
+                h('button', { class: 'btn sm primary', onclick: function (ev) { save(ev.target); } }, 'Save'),
+                e.source === 'manual' ? h('button', { class: 'btn sm', title: 'Forget the manual times and detect again', onclick: function (ev) { busy(ev.target, api('/api/intros/auto', { id: e.id })).then(function () { toast('Detecting again'); setTimeout(function () { go('library'); }, 800); }); } }, 'Auto') : null,
+                h('button', { class: 'btn sm', title: 'Use these times for every episode of season ' + sn, onclick: function (ev) {
+                  if (!confirm('Use "' + (segText(e.segments) || 'no intro') + '" for all episodes of season ' + sn + '? Their own times are replaced (saved as manual).')) return;
+                  busy(ev.target, api('/api/intros/season', { id: e.id })).then(function (r) { toast('Applied to ' + r.updated + ' episodes'); go('library'); }).catch(function (er) { toast(er.message, true); });
+                } }, 'Whole season'))));
+          })));
+      });
+      return h('details', null,
+        h('summary', { text: sh.name + ': skip segments in ' + withIntro + ' of ' + sh.episodes.length + ' episodes' + (pending ? ' (' + pending + ' not checked yet)' : '') }),
+        h('p', { class: 'hint mt', text: 'Times are minutes:seconds, e.g. 0:00-0:14, 2:58-3:07. Leave empty and Save for "no intro". Manual times are never overwritten by automatic detection.' }),
+        tables,
+        h('div', { class: 'row mt' }, h('button', { class: 'btn', onclick: function (ev) { busy(ev.target, api('/api/intros/detect', { show: sh.key, force: true })).then(function () { toast('Detecting intros in ' + sh.name); setTimeout(function () { go('library'); }, 600); }); } }, 'Detect again for ' + sh.name)));
+    });
+    return h('div', { class: 'panel' }, h('div', { class: 'row between' }, h('h2', { text: 'Skip intro' }),
+        busyNow ? h('button', { class: 'btn sm danger', onclick: function (ev) { busy(ev.target, api('/api/intros/cancel', {})).then(function () { go('library'); }); } }, 'Stop')
+          : h('button', { class: 'btn sm', onclick: function (ev) { busy(ev.target, api('/api/intros/detect', {})).then(function () { setTimeout(function () { go('library'); }, 600); }); } }, 'Check new episodes')),
+      h('p', { class: 'muted', text: line }),
+      st.error ? h('p', { class: 'err', text: st.error }) : null,
+      shows.length ? shows : h('p', { class: 'hint', text: 'No series in the library.' }));
   }
 
   // ---------- devices ----------

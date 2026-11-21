@@ -42,6 +42,9 @@
     full: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
     next: 'M6 5.5v13l9-6.5zM17 5h2v14h-2z',
     down: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+    audio: 'M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2',
+    subs: 'M3 6h18v12H3zM7 14h4M13 14h4M7 10h2M11 10h6',
+    skip: 'M5 5.5v13l8-6.5zM13 5.5v13l8-6.5z',
   };
   function icon(name) {
     var NS = 'http://www.w3.org/2000/svg';
@@ -50,10 +53,34 @@
     svg.setAttribute('aria-hidden', 'true');
     var path = document.createElementNS(NS, 'path');
     path.setAttribute('d', ICONS[name]);
-    var filled = name === 'play' || name === 'pause' || name === 'next';
+    var filled = name === 'play' || name === 'pause' || name === 'next' || name === 'skip';
     path.setAttribute('fill', filled ? 'currentColor' : 'none');
     if (!filled) { path.setAttribute('stroke', 'currentColor'); path.setAttribute('stroke-width', '2'); path.setAttribute('stroke-linecap', 'round'); path.setAttribute('stroke-linejoin', 'round'); }
     svg.appendChild(path);
+    return svg;
+  }
+
+  /** Circular arrow with "30" inside: unmistakably "30 seconds back/forward". */
+  function jumpIcon(dir) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 32 32');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('class', 'jump-ico');
+    var arc = document.createElementNS(NS, 'path');
+    arc.setAttribute('d', dir < 0 ? 'M9.2 7.8A11 11 0 1 1 5 16' : 'M22.8 7.8A11 11 0 1 0 27 16');
+    var head = document.createElementNS(NS, 'path');
+    head.setAttribute('d', dir < 0 ? 'M10.5 2.8L8.6 8.3l5.6 1.4' : 'M21.5 2.8l1.9 5.5-5.6 1.4');
+    [arc, head].forEach(function (p) {
+      p.setAttribute('fill', 'none'); p.setAttribute('stroke', 'currentColor'); p.setAttribute('stroke-width', '2.2');
+      p.setAttribute('stroke-linecap', 'round'); p.setAttribute('stroke-linejoin', 'round');
+      svg.appendChild(p);
+    });
+    var t = document.createElementNS(NS, 'text');
+    t.setAttribute('x', '16'); t.setAttribute('y', '20.6'); t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('class', 'jump-num');
+    t.textContent = '30';
+    svg.appendChild(t);
     return svg;
   }
 
@@ -415,7 +442,11 @@
 
     var video = h('video', { class: 'video', playsinline: true, preload: 'auto', autoplay: true });
     var seek = h('input', { type: 'range', class: 'seek', min: '0', max: String(Math.floor(duration)), step: '1', value: '0', 'aria-label': 'Seek' });
-    var timeEl = h('span', { class: 'time' });
+    var timeEl = h('span', { class: 'time cur' }, '0:00');
+    var durEl = h('span', { class: 'time dur' }, fmtTime(duration));
+    var intros = (d.intros || []).filter(function (s) { return s.end - s.start >= 2; });
+    var skipBtn = h('button', { class: 'skip-intro', hidden: true, 'aria-label': 'Skip intro' }, h('span', { text: 'Skip intro' }), icon('skip'));
+    var currentIntro = null;
     var playBtn = h('button', { class: 'ctl play', 'aria-label': 'Play or pause' }, icon('pause'));
     function setPlayIcon(name) { playBtn.textContent = ''; playBtn.appendChild(icon(name)); }
     var spinner = h('div', { class: 'spinner', hidden: true });
@@ -423,22 +454,38 @@
       h('a', { href: d.kind === 'episode' ? '#/show/' + d.showKey : '#/', class: 'ctl back', 'aria-label': 'Back' }, icon('back')),
       h('div', null, h('strong', { text: itemTitle(d) }), h('div', { class: 'muted', text: itemSub(d) })));
 
-    var audioSel = d.audio.length > 1 ? h('select', { class: 'sel', 'aria-label': 'Audio track' },
-      d.audio.map(function (a) { return h('option', { value: String(a.index) }, a.label); })) : null;
-    var subSel = d.subtitles.length ? h('select', { class: 'sel', 'aria-label': 'Subtitles' },
-      [h('option', { value: '' }, 'Subtitles off')].concat(d.subtitles.map(function (s) { return h('option', { value: s.key }, s.label); }))) : null;
-    var nextBtn = d.next ? h('a', { class: 'ctl text', href: '#/watch/' + d.next.id, 'aria-label': 'Next episode' }, icon('next')) : null;
+    // audio / subtitle pickers: one icon button each, opening a small menu
+    var menu = h('div', { class: 'pmenu', hidden: true, role: 'menu' });
+    function openMenu(btn, heading, options, current, onPick) {
+      if (!menu.hidden && menu._for === btn) { menu.hidden = true; return; }
+      menu.textContent = '';
+      menu._for = btn;
+      menu.appendChild(h('div', { class: 'pmenu-head', text: heading }));
+      options.forEach(function (o) {
+        menu.appendChild(h('button', { class: 'pmenu-item' + (o.value === current() ? ' on' : ''), role: 'menuitemradio',
+          'aria-checked': o.value === current() ? 'true' : 'false',
+          onclick: function () { menu.hidden = true; onPick(o.value); } }, o.label));
+      });
+      menu.hidden = false;
+      var first = menu.querySelector('.on') || menu.querySelector('.pmenu-item');
+      if (first) first.focus();
+    }
+    var audioBtn = d.audio.length > 1 ? h('button', { class: 'ctl', 'aria-label': 'Audio track', title: 'Audio' }, icon('audio')) : null;
+    var subBtn = d.subtitles.length ? h('button', { class: 'ctl', 'aria-label': 'Subtitles', title: 'Subtitles' }, icon('subs')) : null;
+    var nextBtn = d.next ? h('a', { class: 'ctl', href: '#/watch/' + d.next.id, 'aria-label': 'Next episode', title: 'Next episode' }, icon('next')) : null;
     var upNext = h('div', { class: 'upnext', hidden: true });
+    var back30 = h('button', { class: 'ctl jump', 'aria-label': 'Back 30 seconds', title: 'Back 30 seconds', onclick: function () { seekTo(now() - 30); } }, jumpIcon(-1));
+    var fwd30 = h('button', { class: 'ctl jump', 'aria-label': 'Forward 30 seconds', title: 'Forward 30 seconds', onclick: function () { seekTo(now() + 30); } }, jumpIcon(1));
 
-    var controls = h('div', { class: 'controls' }, seek,
+    var controls = h('div', { class: 'controls' },
+      h('div', { class: 'seekline' }, timeEl, seek, durEl),
       h('div', { class: 'ctl-row' },
-        playBtn,
-        h('button', { class: 'ctl', 'aria-label': 'Back 10 seconds', title: 'Back 10 s', onclick: function () { seekTo(now() - 10); } }, icon('rew')),
-        h('button', { class: 'ctl', 'aria-label': 'Forward 30 seconds', title: 'Forward 30 s', onclick: function () { seekTo(now() + 30); } }, icon('fwd')),
-        timeEl, h('span', { class: 'grow' }), audioSel, subSel, nextBtn,
-        h('button', { class: 'ctl', 'aria-label': 'Fullscreen', onclick: toggleFs }, icon('full'))));
+        h('div', { class: 'ctl-side left' }, audioBtn, subBtn),
+        h('div', { class: 'ctl-center' }, back30, playBtn, fwd30),
+        h('div', { class: 'ctl-side right' }, nextBtn, h('button', { class: 'ctl', 'aria-label': 'Fullscreen', title: 'Fullscreen', onclick: toggleFs }, icon('full')))));
 
-    var el = h('div', { class: 'player' }, video, spinner, title, controls, upNext);
+    var el = h('div', { class: 'player' }, video, spinner, title, controls, skipBtn, menu, upNext);
+    el.addEventListener('click', function (e) { if (!menu.hidden && !menu.contains(e.target) && !e.target.closest('.ctl')) menu.hidden = true; });
 
     function now() { return offset + (video.currentTime || 0); }
 
@@ -466,6 +513,38 @@
         video.play().catch(function () {});
       });
     }
+
+    function updateSkip(t) {
+      var seg = null;
+      for (var i = 0; i < intros.length; i++) if (t >= intros[i].start && t < intros[i].end - 1) { seg = intros[i]; break; }
+      if (seg !== currentIntro) {
+        currentIntro = seg;
+        skipBtn.hidden = !seg;
+        if (seg) { skipBtn.classList.remove('pop'); void skipBtn.offsetWidth; skipBtn.classList.add('pop'); }
+      }
+    }
+    skipBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (!currentIntro) return;
+      var to = currentIntro.end;
+      skipBtn.hidden = true;
+      currentIntro = null;
+      seekTo(to);
+    });
+    if (audioBtn) audioBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openMenu(audioBtn, 'Audio', d.audio.map(function (a) { return { value: a.index, label: a.label }; }), function () { return audio; }, function (v) {
+        if (v === audio) return;
+        audio = v;
+        direct = false; // switching audio needs the server to pick the track
+        seekTo(now());
+      });
+    });
+    if (subBtn) subBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      openMenu(subBtn, 'Subtitles', [{ value: '', label: 'Off' }].concat(d.subtitles.map(function (s) { return { value: s.key, label: s.label }; })),
+        function () { return subKey; }, function (v) { subKey = v; subBtn.classList.toggle('on', !!v); loadSubs(); });
+    });
 
     function save(force) {
       var pos = now();
@@ -518,7 +597,8 @@
       var t = now();
       if (document.activeElement !== seek) seek.value = String(Math.floor(t));
       seek.style.setProperty('--pct', (duration ? Math.min(100, t / duration * 100) : 0).toFixed(2) + '%');
-      timeEl.textContent = fmtTime(t) + ' / ' + fmtTime(duration);
+      timeEl.textContent = fmtTime(t);
+      updateSkip(t);
       save(false);
       if (d.next && duration - t < 25 && upNext.hidden && !el._shown) { el._shown = true; startUpNext(); }
     });
@@ -530,6 +610,7 @@
     video.addEventListener('ended', function () { save(true); if (!el._shown) startUpNext(); });
     video.addEventListener('error', function () {
       spinner.hidden = true;
+      durEl.textContent = '';
       timeEl.textContent = 'Playback error. This device may not support the file. Try again or pick another title.';
     });
     video.addEventListener('click', function () { if (video.paused) video.play(); else video.pause(); });
@@ -538,21 +619,18 @@
     seek.addEventListener('change', function () { seekTo(Number(seek.value)); });
     el.addEventListener('mousemove', poke);
     el.addEventListener('touchstart', poke, { passive: true });
-    if (audioSel) audioSel.addEventListener('change', function () {
-      audio = Number(audioSel.value);
-      direct = false; // switching audio needs the server to pick the track
-      seekTo(now());
-    });
-    if (subSel) subSel.addEventListener('change', function () { subKey = subSel.value; loadSubs(); });
 
     function onKey(e) {
       if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
       if (e.target.tagName === 'SELECT') return;
+      if (e.target.closest && e.target.closest('.pmenu')) { if (e.key === 'Escape') { menu.hidden = true; } return; }
       var k = e.key;
       if (k === ' ' || k === 'k' || k === 'Enter' && e.target === document.body) { e.preventDefault(); if (video.paused) video.play(); else video.pause(); }
       else if (k === 'ArrowLeft' || k === 'j') { e.preventDefault(); seekTo(now() - 10); }
       else if (k === 'ArrowRight' || k === 'l') { e.preventDefault(); seekTo(now() + 30); }
       else if (k === 'f') toggleFs();
+      else if (k === 's' && currentIntro) skipBtn.click();
+      else if (k === 'Escape' && !menu.hidden) { menu.hidden = true; e.preventDefault(); return; }
       else if (k === 'Escape' && !document.fullscreenElement) history.back();
       poke();
     }
@@ -568,7 +646,7 @@
     } else {
       seekTo(resumeAt);
     }
-    timeEl.textContent = fmtTime(resumeAt) + ' / ' + fmtTime(duration);
+    timeEl.textContent = fmtTime(resumeAt);
     document.body.classList.add('watching');
     if (stage) stage.pause(); // the room goes dark while a film plays
 

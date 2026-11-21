@@ -24,7 +24,7 @@ function num(v, { min = 0, max = 1e7 } = {}) {
   return Number.isFinite(n) && n >= min && n <= max ? n : null;
 }
 
-function createApp({ cfg, catalog, sessions, progress, limiter, log = console, helper = null }) {
+function createApp({ cfg, catalog, sessions, progress, limiter, log = console, helper = null, intros = null }) {
   const isAllowedIp = createNetworkGuard(cfg.allowedNetworks);
   const isAllowedHost = createHostGuard(cfg.allowedHosts);
   const statics = loadStatic(path.join(__dirname, '..', 'public'));
@@ -105,6 +105,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
       })),
       subtitles,
       next: nxt ? catalog.summary(nxt) : null,
+      intros: item.kind === 'episode' && intros ? ((intros.get(item.id) || {}).segments || []) : [],
     };
   }
 

@@ -292,6 +292,37 @@ function createAdmin(runtime, { keys, port }) {
       return sendJson(res, 200, { ok: runtime.sessions.renameDevice(b.id, name) });
     }
 
+    // ----- intro skipping -----
+    if (m === 'GET' && p === '/api/intros') {
+      const cat = runtime.requireCatalog();
+      const shows = [...cat.shows.values()].sort((a, b) => a.name.localeCompare(b.name)).map((sh) => ({
+        key: sh.key, name: sh.name,
+        episodes: sh.episodes.map((e) => {
+          const r = runtime.intros.get(e.id);
+          return { id: e.id, season: e.season, episode: e.episode, title: e.title, duration: (cat.cachedProbe(e) || {}).duration || null,
+            segments: r ? r.segments : null, source: r ? r.source : null };
+        }),
+      }));
+      return sendJson(res, 200, { shows, status: runtime.intros.status() });
+    }
+    if (m === 'POST' && p.startsWith('/api/intros/')) {
+      const cat = runtime.requireCatalog();
+      const b = await readJson(req, 16 * 1024);
+      const action = p.slice('/api/intros/'.length);
+      if (action === 'detect') {
+        if (b.show !== undefined && !cat.shows.has(String(b.show))) return sendError(res, 404, 'Unknown series');
+        runtime.intros.schedule(b.show === undefined ? null : String(b.show), { force: !!b.force });
+        return sendJson(res, 202, { ok: true, status: runtime.intros.status() });
+      }
+      if (action === 'cancel') { runtime.intros.cancel(); return sendJson(res, 200, { ok: true }); }
+      const item = cat.get(String(b.id));
+      if (!item || item.kind !== 'episode') return sendError(res, 404, 'Unknown episode');
+      if (action === 'set') return sendJson(res, 200, { ok: true, segments: runtime.intros.setManual(item, b.segments) });
+      if (action === 'auto') { runtime.intros.resetToAuto(item); return sendJson(res, 202, { ok: true }); }
+      if (action === 'season') return sendJson(res, 200, { ok: true, updated: runtime.intros.applyToSeason(item) });
+      return sendError(res, 404, 'Not found');
+    }
+
     // ----- storage compaction -----
     if (m === 'POST' && p === '/api/compact/analyze') {
       runtime.requireCatalog();

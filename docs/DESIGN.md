@@ -81,6 +81,7 @@ This document records the concepts and decisions behind it.
 | `src/admin.js` | Admin console API (loopback only): wizard, config, devices, cert, autostart, compaction, logs |
 | `src/service.js` | `systemd --user` autostart / linger / quit |
 | `src/tls.js` | Name-constrained home CA + server certificate issuance/renewal (openssl), inspection (`X509Certificate`) |
+| `src/intros.js` | Intro detection: Chromaprint fingerprints of each episode's first 10 min (ffmpeg, nice 19, cached in SQLite), all-offset comparison with up to 4 neighbouring episodes, segments that recur in ≥ 2 other episodes; manual overrides from the console are never replaced |
 | `src/mdns.js` | Minimal mDNS responder: answers `lumio.local` with the current IPv4 address |
 | `src/netinfo.js` | Detects VMware/VirtualBox NAT from the default gateway's MAC, so the console can recommend Bridged |
 | `src/compact.js` | AV1 compaction job with progress and verification |

@@ -15,6 +15,7 @@ const { Sessions, LoginLimiter } = require('./auth');
 const { Catalog } = require('./catalog');
 const { Progress } = require('./progress');
 const { Compactor } = require('./compact');
+const { IntroDetector } = require('./intros');
 const { createApp } = require('./app');
 const media = require('./media');
 const log = require('./log');
@@ -51,6 +52,7 @@ class Runtime {
     this.error = null;
     this.startedAt = null;
     this.compactor = new Compactor({ db: this.db, catalog: () => this.requireCatalog(), log });
+    this.intros = new IntroDetector({ db: this.db, catalog: () => this.requireCatalog(), log });
     this.helperTokens = new Map(); // single-use Windows-helper token -> { exp, autoApply }
     this.pendingHost = null;       // address proposed by a viewer-downloaded helper
     this.mdns = null;
@@ -150,7 +152,7 @@ class Runtime {
       this.catalog = new Catalog(this.db, cfg.mediaDirs, { probe: media.probe, log });
       this.catalog.rescan();
       this.handler = createApp({
-        cfg, catalog: this.catalog, sessions: this.sessions, progress: this.progress, limiter: this.limiter, log,
+        cfg, catalog: this.catalog, sessions: this.sessions, progress: this.progress, limiter: this.limiter, log, intros: this.intros,
         helper: { download: () => this.windowsHelper({ autoApply: false }), report: (t, ip) => this.hostReport(t, ip) },
       });
       const server = cfg.https
@@ -168,7 +170,9 @@ class Runtime {
       server.on('error', (e) => log.error('server error:', e.message));
       this.server = server;
       this.startedAt = Date.now();
-      this.timers.push(setInterval(() => this.catalog && this.catalog.rescan(), cfg.rescanMinutes * 60_000));
+      this.timers.push(setInterval(() => { if (this.catalog) { this.catalog.rescan(); this.intros.schedule(); } }, cfg.rescanMinutes * 60_000));
+      // look for intros in new episodes shortly after start (background, low priority)
+      this.timers.push(setTimeout(() => { if (this.catalog) this.intros.schedule(); }, 45_000));
       this.timers.push(setInterval(() => this.sessions.purgeExpired(), 3_600_000));
       this.timers.push(setInterval(() => this.watchAddresses(), 30_000));
       if (cfg.localName && cfg.mdns !== false) {
@@ -186,6 +190,7 @@ class Runtime {
 
   async stop() {
     this.timers.forEach(clearInterval);
+    this.intros.cancel();
     this.timers = [];
     if (this.mdns) { this.mdns.stop(); this.mdns = null; }
     if (this.server) {
@@ -218,12 +223,14 @@ class Runtime {
       network: gatewayInfo(),
       activeStreams: this.handler ? this.handler.active.remux + this.handler.active.transcode : 0,
       transcodes: this.handler ? this.handler.active.transcode : 0,
+      intros: this.intros.status(),
     };
   }
 
   async close() {
     this.closed = true;
     this.compactor.cancel();
+    this.intros.cancel();
     await this.stop();
     this.db.close();
   }
