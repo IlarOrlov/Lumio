@@ -27,7 +27,7 @@ p { margin: 0 0 10px; }
 code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .88em; }
 code { background: rgba(255, 255, 255, .07); border: 1px solid var(--line); padding: 1px 6px; border-radius: 6px; }
 
-.room { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: -1; display: block; pointer-events: none; }
+.room { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; display: block; pointer-events: none; }
 .no-gl .room { display: none; }
 .no-gl body { background: conic-gradient(from 118deg at -4% -6%, transparent 0deg, rgba(255, 220, 160, .12) 8deg, transparent 26deg), linear-gradient(180deg, var(--ink), #0b0e24); background-attachment: fixed; }
 
