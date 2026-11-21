@@ -1,5 +1,6 @@
 'use strict';
 (function () {
+ function start() {
   var form = document.getElementById('login');
   var err = document.getElementById('error');
   var pw = document.getElementById('password');
@@ -11,11 +12,13 @@
   if (e) err.textContent = e[1] === 'locked' ? 'Too many failed attempts. Wait a minute and try again.' : 'That password doesn\'t match. Use the household password from Lumio\'s setup.';
   if (location.search && window.history && history.replaceState) history.replaceState(null, '', '/login');
 
-  if (window.LumioFX) {
-    var stage = LumioFX.beam(document.getElementById('room'), { power: 1 });
-    LumioFX.tilt();
-    if (stage) { stage.aimAt(form); addEventListener('resize', function () { stage.aimAt(form); }); }
-  }
+  try { // visual effects are optional: they must never stop sign-in from working
+    if (window.LumioFX) {
+      var stage = LumioFX.beam(document.getElementById('room'), { power: 1 });
+      LumioFX.tilt();
+      if (stage) { stage.aimAt(form); addEventListener('resize', function () { stage.aimAt(form); }); }
+    }
+  } catch (fxErr) { if (window.LumioReport) LumioReport('effects: ' + fxErr.message); }
 
   function guessName() {
     var ua = navigator.userAgent;
@@ -76,4 +79,6 @@
       pw.select();
     });
   });
+ }
+ try { start(); } catch (e) { if (window.LumioFail) window.LumioFail('sign-in page', e); else throw e; }
 })();

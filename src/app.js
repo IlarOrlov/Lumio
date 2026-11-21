@@ -36,6 +36,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
   const thumbsDir = path.join(cfg.dataDir, 'thumbs');
   const cookieName = cfg.https ? '__Host-lumio' : 'lumio';
   const active = { transcode: 0, remux: 0 };
+  let diagTimes = [];
 
   function setSessionCookie(res, token, maxAgeSec) {
     const attrs = [`${cookieName}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', `Max-Age=${maxAgeSec}`];
@@ -204,6 +205,20 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
 
     if (m === 'POST' && p === '/api/login') return login(req, res);
     if (m === 'POST' && p === '/login') return formLogin(req, res);
+    if (m === 'POST' && p === '/api/diag') {
+      // Browser-side startup errors, so problems on TVs can be diagnosed without dev tools.
+      // Logged only while request logging is on; rate limited, size capped, control chars stripped.
+      const body = await readJson(req, 2048);
+      const now = Date.now();
+      diagTimes = diagTimes.filter((t) => now - t < 60_000);
+      if (cfg.logRequests && diagTimes.length < 30) {
+        diagTimes.push(now);
+        const clean = (v, n) => String(v || '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, n);
+        log.warn?.(`[client] ${req.socket.remoteAddress} ${clean(body.page, 40)}: ${clean(body.msg, 800)}`);
+      }
+      res.writeHead(204, { 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     if (m === 'POST' && p === '/api/host-report' && helper) {
       // Windows helper callback: authorised by its single-use token, not a cookie.
       const body = await readJson(req, 1024);

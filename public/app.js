@@ -2,12 +2,16 @@
 /* Lumio web client. No frameworks, no innerHTML with data: every string from
    the server is inserted with textContent, so the UI cannot be script-injected. */
 (function () {
+ function start() {
   var view = document.getElementById('view');
   var searchBox = document.getElementById('search');
   var whoEl = document.getElementById('who');
   var state = { me: null, library: null, progress: null };
-  var stage = window.LumioFX ? LumioFX.beam(document.getElementById('room'), { power: 0.9 }) : null;
-  if (window.LumioFX) LumioFX.tilt();
+  var stage = null;
+  try { // visual effects are optional: they must never stop the app from working
+    stage = window.LumioFX ? LumioFX.beam(document.getElementById('room'), { power: 0.9 }) : null;
+    if (window.LumioFX) LumioFX.tilt();
+  } catch (fxErr) { stage = null; if (window.LumioReport) LumioReport('effects: ' + fxErr.message); }
   var DEFAULT_AIM = { x: 0.72, y: 0.4 };
 
   // ---------- helpers ----------
@@ -742,6 +746,8 @@
     return loadAll();
   }).then(render).catch(function (e) {
     if (e && e.message === 'signed out') return;
-    if (window.LumioShowError) window.LumioShowError('Couldn\'t load your library: ' + ((e && e.message) || e));
+    if (window.LumioFail) window.LumioFail('loading the library', e);
   });
+ }
+ try { start(); } catch (e) { if (window.LumioFail) window.LumioFail('app', e); else throw e; }
 })();

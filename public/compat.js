@@ -69,9 +69,31 @@
     var ua = document.createElement('p'); ua.className = 'ua'; ua.textContent = navigator.userAgent;
     box.appendChild(h); box.appendChild(p); box.appendChild(ua);
   }
+  // Tell the server (it logs this only while diagnostics are on; never shown to others).
+  function report(msg) {
+    try {
+      var x = new XMLHttpRequest();
+      x.open('POST', '/api/diag', true);
+      x.setRequestHeader('Content-Type', 'application/json');
+      x.send(JSON.stringify({ msg: String(msg).slice(0, 800), page: location.pathname }));
+    } catch (e2) { /* diagnostics are best effort */ }
+  }
+  /** Lumio's own startup failures (caught by try/catch, so the real message is known). */
+  window.LumioFail = function (where, err) {
+    var msg = where + ': ' + ((err && err.message) || err) + (err && err.stack ? ' | ' + String(err.stack).split('\n').slice(0, 3).join(' / ') : '');
+    report(msg);
+    showError(msg);
+  };
   window.LumioShowError = showError;
+  window.LumioReport = report;
   window.addEventListener('error', function (e) {
-    if (e && e.message) showError(e.message + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : ''));
+    if (!e) return;
+    var ours = e.filename && e.filename.indexOf(location.origin + '/') === 0;
+    // TV browsers inject their own scripts; their errors arrive as a bare "Script error."
+    // with no file. Log them for diagnosis, but don't alarm the viewer.
+    if (!ours) { report('foreign: ' + (e.message || 'unknown')); return; }
+    report(e.message + ' (' + e.filename.split('/').pop() + ':' + e.lineno + ':' + e.colno + ')');
+    showError(e.message + ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')');
   });
   if (!window.Promise) {
     document.addEventListener('DOMContentLoaded', function () { showError('This browser is too old for Lumio (no Promise support). Try the TV’s app store for a newer browser, or cast from a phone.'); });
