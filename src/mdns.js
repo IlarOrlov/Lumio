@@ -135,6 +135,7 @@ class MdnsResponder {
     this.conflict = null;
     this.error = null;
     this.answered = 0;
+    this.askers = new Map(); // ip -> last time it asked for our name (diagnostics)
   }
 
   ips() { return this.getInterfaces().map((i) => i.address); }
@@ -221,6 +222,9 @@ class MdnsResponder {
     const ips = local.length ? local : ifs.map((i) => i.address);
     if (!ips.length) return;
     this.answered += 1;
+    this.askers.delete(rinfo.address);
+    this.askers.set(rinfo.address, Date.now());
+    if (this.askers.size > 20) this.askers.delete(this.askers.keys().next().value);
     if (rinfo.port !== this.port) {
       // Legacy unicast resolver (e.g. some TVs): reply directly, echoing the question and ID.
       this.send(buildResponse(this.name, ips, { id: pkt.id, question: q.raw, legacy: true }), rinfo.address, rinfo.port);
@@ -230,7 +234,7 @@ class MdnsResponder {
   }
 
   status() {
-    return { name: this.name, active: !!this.sock, error: this.error, conflict: this.conflict, ips: this.ips(), answered: this.answered };
+    return { name: this.name, active: !!this.sock, error: this.error, conflict: this.conflict, ips: this.ips(), answered: this.answered, askers: [...this.askers].map(([ip, at]) => ({ ip, at })) };
   }
 
   stop() {
