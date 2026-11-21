@@ -216,9 +216,18 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
       res.writeHead(200, { 'Content-Type': 'application/x-x509-ca-cert', 'Content-Disposition': 'attachment; filename="Lumio-home-CA.crt"', 'Content-Length': pem.length, 'Cache-Control': 'no-store' });
       return res.end(pem);
     }
+    // Credentials never belong in a URL. If a browser ever sends the sign-in form
+    // as a GET (old cached page, broken script), refuse to render it with the
+    // query and bounce to a clean address; nothing in the query is ever read.
+    if ((m === 'GET' || m === 'HEAD') && p === '/login' && url.search && !/^\?e=(wrong|locked)$/.test(url.search)) {
+      res.writeHead(303, { Location: '/login', 'Cache-Control': 'no-store' });
+      return res.end();
+    }
     if ((m === 'GET' || m === 'HEAD') && statics.has(p === '/' ? '/index.html' : p === '/login' ? '/login.html' : p)) {
       const f = statics.get(p === '/' ? '/index.html' : p === '/login' ? '/login.html' : p);
-      res.writeHead(200, { 'Content-Type': f.type, 'Content-Length': f.body.length, 'Cache-Control': 'no-cache' });
+      // Pages are never stored (a TV must not keep showing an outdated sign-in form).
+      const cache = f.type.startsWith('text/html') ? 'no-store' : 'no-cache';
+      res.writeHead(200, { 'Content-Type': f.type, 'Content-Length': f.body.length, 'Cache-Control': cache });
       return res.end(m === 'HEAD' ? undefined : f.body);
     }
 

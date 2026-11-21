@@ -254,3 +254,17 @@ test('plain HTML form sign-in works without scripts and never puts the password 
   const evil = await fetch(base + '/login', { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://evil.example' }, body: 'password=x&device=y' });
   assert.equal(evil.status, 403, 'cross-site form posts refused');
 });
+
+test('a sign-in attempt with credentials in the URL is never rendered: clean redirect, page not cached', async (t) => {
+  const { server, base } = await setup();
+  t.after(() => server.close());
+  const r = await fetch(base + '/login?username=x&password=secret&device=TV', { redirect: 'manual' });
+  assert.equal(r.status, 303);
+  assert.equal(r.headers.get('location'), '/login');
+  assert.equal(r.headers.get('cache-control'), 'no-store');
+  const page = await req(base, '/login');
+  assert.equal(page.headers.get('cache-control'), 'no-store');
+  assert.match(page.text, /<form[^>]*method="post"[^>]*action="\/login"/);
+  assert.ok(!/name="username"/.test(page.text), 'helper field is never submitted');
+  assert.equal((await fetch(base + '/login?e=wrong', { redirect: 'manual' })).status, 200);
+});
