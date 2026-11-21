@@ -14,6 +14,11 @@ const CSP = [
   "base-uri 'none'",
   "form-action 'self'",
   "frame-ancestors 'none'",
+  "worker-src 'none'",
+  // Script injection sinks (innerHTML, eval, ...) are disabled outright: the
+  // UI only ever uses textContent/createElement, so nothing legitimate breaks.
+  "require-trusted-types-for 'script'",
+  "trusted-types 'none'",
 ].join('; ');
 
 function securityHeaders(res, { https }) {
@@ -23,9 +28,17 @@ function securityHeaders(res, { https }) {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()');
+  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+  res.setHeader('Origin-Agent-Cluster', '?1');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  res.setHeader('X-DNS-Prefetch-Control', 'off');
+  res.setHeader('Permissions-Policy', [
+    'camera=()', 'microphone=()', 'geolocation=()', 'payment=()', 'usb=()', 'serial=()', 'hid=()',
+    'midi=()', 'display-capture=()', 'clipboard-read=()', 'accelerometer=()', 'gyroscope=()', 'magnetometer=()',
+    'fullscreen=(self)', 'picture-in-picture=(self)', 'autoplay=(self)',
+  ].join(', '));
   res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-  if (https) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  if (https) res.setHeader('Strict-Transport-Security', 'max-age=63072000');
 }
 
 function parseCookies(header) {
@@ -83,7 +96,7 @@ const MIME = {
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.jpg': 'image/jpeg', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
   '.ico': 'image/x-icon', '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/mp4',
-  '.webm': 'video/webm',
+  '.webm': 'video/webm', '.woff2': 'font/woff2',
 };
 
 /**

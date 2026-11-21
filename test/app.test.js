@@ -67,6 +67,9 @@ test('security headers are present on every response', async (t) => {
   assert.equal(r.status, 200);
   assert.match(r.headers.get('content-security-policy'), /default-src 'none'.*script-src 'self'/);
   assert.equal(r.headers.get('x-frame-options'), 'DENY');
+  assert.match(r.headers.get('content-security-policy'), /require-trusted-types-for 'script'; trusted-types 'none'/);
+  assert.equal(r.headers.get('cross-origin-embedder-policy'), 'require-corp');
+  assert.match(r.headers.get('permissions-policy'), /camera=\(\).*fullscreen=\(self\)/);
   assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(r.headers.get('referrer-policy'), 'no-referrer');
 });

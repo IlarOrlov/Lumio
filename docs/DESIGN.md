@@ -45,7 +45,7 @@ This document records the concepts and decisions behind it.
 
 ```
  Phone / TV / Laptop (browser)
-        │  HTTPS (self-signed, TLS ≥ 1.2)
+        │  HTTPS (Lumio home CA, TLS 1.3 / 1.2 AEAD), https://lumio.local:8443
         ▼
  Windows host :8443 ── VMware NAT port forward ──▶ Ubuntu VM 192.168.204.128:8443
                                                        │
@@ -80,7 +80,9 @@ This document records the concepts and decisions behind it.
 | `src/runtime.js` | Owns DB + streaming listener; start/stop/reconfigure without a process restart |
 | `src/admin.js` | Admin console API (loopback only): wizard, config, devices, cert, autostart, compaction, logs |
 | `src/service.js` | `systemd --user` autostart / linger / quit |
-| `src/tls.js` | Self-signed certificate generation (openssl) and inspection (`X509Certificate`) |
+| `src/tls.js` | Name-constrained home CA + server certificate issuance/renewal (openssl), inspection (`X509Certificate`) |
+| `src/mdns.js` | Minimal mDNS responder: answers `lumio.local` with the current IPv4 address |
+| `src/netinfo.js` | Detects VMware/VirtualBox NAT from the default gateway's MAC, so the console can recommend Bridged |
 | `src/compact.js` | AV1 compaction job with progress and verification |
 | `src/log.js` | Logger + in-memory ring buffer for the console's Logs page |
 | `admin/` | Admin console UI (CSP-compatible, no inline script) |
@@ -104,11 +106,11 @@ Browser ─▶ admin console (loopback only) ─ exchanges key for a session coo
 
 | Page | What it does |
 |---|---|
-| **Setup wizard** (first run) | Password → media folders (folder browser) → Windows host IP + port, then generates the certificate and starts streaming |
+| **Setup wizard** (first run) | Password → media folders (folder browser) → port (Windows host IP only for VMware NAT), then generates the certificate and starts streaming |
 | **Overview** | Address to open on devices, streaming status, start/stop/restart, library stats, live conversions, *start automatically* toggle (systemd user unit + linger), quit |
 | **Library** | Add/remove media folders via folder picker, rescan, list of series and movies, naming guide |
 | **Devices** | Every signed-in device with last activity and watch history; rename / remove |
-| **Network & Security** | Host IP, port, HTTPS, certificate (SANs, expiry, fingerprint, renew, download), household password (+ sign out everywhere), allowed networks / hostnames, session length, transcode limit, rescan interval; VMware NAT guide filled in with the real addresses |
+| **Network & Security** | Local name (`lumio.local`), port, HTTPS, Windows host IP (NAT only), home CA download + fingerprint + per-platform install steps, server certificate (SANs, expiry, fingerprint, renew, download), household password (+ sign out everywhere), allowed networks / hostnames, session length, transcode limit, rescan interval; Bridged guide when NAT is detected, Windows helper as fallback |
 | **Storage** | Analyze → choose files → AV1 compaction with live progress, speed, cancel and per-file results |
 | **Logs** | Live tail of the server log |
 
@@ -262,28 +264,35 @@ resource exhaustion.
 | Control | Implementation |
 |---|---|
 | **Network allowlist** | Only private ranges (RFC 1918, loopback, ULA, link-local) by default. Public IPs get 403 before any parsing. |
-| **Not exposed to the internet** | No router port forward is needed or wanted. VMware NAT forward + Windows firewall scoped to the LAN profile. |
-| **TLS** | HTTPS by default with a self-signed ECDSA P-256 cert (SAN = host and VM IPs), TLS ≥ 1.2, HSTS. Protects the password and session cookie from LAN sniffing. |
+| **Not exposed to the internet** | No router port forward is needed or wanted. Recommended VM networking is *Bridged* (nothing changes on the Windows host). With NAT: one VMware forward + a Windows firewall rule scoped to the Private profile and local subnet. |
+| **Local name** | `lumio.local` via a built-in mDNS responder (RFC 6762). Answers only A/ANY questions for exactly its name, only to private/link-local senders, with bounds-checked parsing (no compression loops, size cap). It answers with the address on the asker's subnet and re-announces when the IP changes, so devices keep finding Lumio after DHCP changes. Conflicts with another host using the name are detected and shown in the console. |
+| **TLS** | HTTPS by default. TLS 1.3 preferred; TLS 1.2 only with ECDHE + AEAD suites (AES-GCM, ChaCha20-Poly1305); X25519/P-256 key exchange; HSTS 2 years. ECDSA P-256 keys, SHA-256 signatures. |
+| **Certificates** | Lumio runs its own **home CA** (10 years, key mode 600) and issues a server certificate (397 days) for `lumio.local`, `localhost` and the machine's current IPs. The CA is **name-constrained** (critical `nameConstraints`): it may only sign for Lumio's own names and private/loopback IP ranges, so installing it on a phone can't be abused to intercept real websites (verified: a CA-signed `www.google.com` certificate fails with *permitted subtree violation*). The server certificate is re-issued automatically when the IP changes or 30 days before expiry and hot-swapped without a restart; the CA stays, so devices install it only once. `/lumio.crt` serves the CA's public certificate; its fingerprint is shown in the console for out-of-band checking. |
 | **Password** | One household password, ≥ 12 chars, stored as **scrypt** (N=2¹⁵, r=8, p=1, 16-byte salt). Constant-time compare. Config file is mode 600. |
 | **Brute-force** | Global limiter: 8 failures in 15 min locks login, 1 min doubling to 1 h. It's global because VMware NAT makes every client share one source IP. |
 | **Sessions** | 256-bit random tokens. **Only SHA-256 hashes are stored**, so a DB leak doesn't yield live sessions. Cookie: `__Host-` prefix, `HttpOnly`, `Secure`, `SameSite=Strict`. Expiring, revocable per device. |
 | **CSRF** | Every POST needs a per-session CSRF token header plus a matching `Origin`/`Sec-Fetch-Site`. Bodies must be `application/json` (forces a CORS preflight that's never granted). |
 | **DNS rebinding** | Host header must be an IP literal, `localhost`, or listed in `allowedHosts`, otherwise 421. |
-| **XSS** | Strict CSP: `default-src 'none'`, `script-src 'self'`, no inline script or style, `frame-ancestors 'none'`. The client renders server data with `textContent` only, never `innerHTML`. |
+| **XSS** | Strict CSP: `default-src 'none'`, `script-src 'self'`, no inline script or style, `frame-ancestors 'none'`, `worker-src 'none'`, and **Trusted Types enforced with no policies** (`require-trusted-types-for 'script'; trusted-types 'none'`), so `innerHTML`/`eval`-style sinks are disabled outright. The client renders server data with `textContent` only. |
 | **Path traversal** | Clients only ever send opaque IDs (20 hex chars). Files are looked up in the scanned map. Static assets are an in-memory whitelist loaded at boot. Symlinks pointing outside media folders are ignored. File paths are never sent to clients. |
 | **ffmpeg hardening** | `spawn` with argument arrays (no shell), `file:` prefix on every input (a filename can't become `http:`, `concat:`, `pipe:`), `-protocol_whitelist file`, numeric params validated and clamped, processes killed when the client disconnects. |
 | **Resource limits** | Concurrent transcodes capped (`maxTranscodes`). JSON bodies ≤ 16 KB. URL ≤ 2 KB. Header/request/keep-alive timeouts (slowloris). `maxConnections`. Only GET/HEAD/POST. |
-| **Headers** | nosniff, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`, COOP/CORP same-origin, restrictive Permissions-Policy, `noindex`. |
+| **Headers** | nosniff, `X-Frame-Options DENY`, `Referrer-Policy no-referrer`, COOP/CORP same-origin, `COEP require-corp`, `Origin-Agent-Cluster`, Permissions-Policy denying camera/mic/location/USB/serial/HID/MIDI/sensors/screen capture, `noindex`. |
 | **Admin console isolation** | Separate listener bound to `127.0.0.1` only (never on the LAN); remote-address check as well. Unlocked by a 256-bit key that is **single-use and expires after 60 s**, issued only over an owner-only unix socket (so only the same OS user can get one). It briefly appears in the browser's command line, which other local users could read, but by then it's consumed or expired. It travels in the URL fragment (never sent in requests or logged) and is swapped for an `HttpOnly; SameSite=Strict` session cookie. POSTs need CSRF token + exact `Origin`; `Host` must be `127.0.0.1`/`localhost` (DNS rebinding). The password hash is never sent to the browser. Media folders can't be system directories; allowed networks can't be `0.0.0.0/0`. |
-| **Windows helper** | Download requires a signed-in device (viewer) or the admin console. The host-report endpoint accepts only a single-use, 2 h token and a private IPv4 address; the IP is validated before the token is consumed. Viewer-issued tokens can only *propose* an address (owner confirms in the admin console); only admin-issued tokens apply directly. Certificate renewals merge names instead of replacing them. The helper pins Lumio's certificate fingerprint, so it can't be tricked into reporting to another server. Firewall rule: Private profile and LocalSubnet only. |
+| **Windows helper** | Download requires a signed-in device (viewer) or the admin console. The host-report endpoint accepts only a single-use, 2 h token and a private IPv4 address; the IP is validated before the token is consumed. Viewer-issued tokens can only *propose* an address (owner confirms in the admin console); only admin-issued tokens apply directly. The helper pins Lumio's certificate fingerprint, so it can't be tricked into reporting to another server. Firewall rule: Private profile and LocalSubnet only. Minimal footprint on the Windows drive: no backup copies, logs or temp files, PowerShell module cache disabled (`PSModuleAnalysisCachePath=NUL`), an **Undo** mode that removes the NAT line and firewall rule, and an offer to delete itself at the end. |
 | **Least privilege** | Refuses to run as root. umask 077. The systemd unit adds `NoNewPrivileges`, `ProtectSystem=strict`, read-only media, private /tmp, syscall filtering, capability drop and address-family restriction. |
 | **Supply chain** | Zero npm runtime dependencies. Only Node built-ins (`node:sqlite`, `node:crypto`, …) and the distro's ffmpeg. |
 | **Secrets in a public repo** | `config/lumio.json`, `config/tls/` and `data/` are git-ignored. Only `lumio.example.json` is committed. |
 
 **Accepted risks**
 
-- A self-signed certificate means a one-time browser warning per device. Install `cert.pem` as
-  trusted on devices to remove it.
+- Devices that don't install the home CA see a certificate warning and must click through it,
+  which can't distinguish Lumio from an impostor. Install the CA (Network & Security) on devices
+  you use regularly.
+- `.local` names need mDNS on the client. Most phones, tablets and computers have it; some older
+  smart TVs don't and must use the IP address (a DHCP reservation on the router keeps it fixed).
+- Data at rest (watch history, device names) isn't encrypted; it holds nothing secret, and the
+  data directory is owner-only (700).
 - Anyone with the household password can revoke other devices. That fits a household trust model.
 - The global login lock can be triggered by a hostile LAN device (a lock-out, not a breach).
 - ffmpeg parses untrusted media. Keep it updated (`sudo apt upgrade`). The systemd sandbox limits
@@ -310,6 +319,7 @@ folder above `Season N`. Release junk (`1080p`, `x264`, `BluRay`, …) is stripp
 ## 8. Left to the builder / future work
 
 - HLS output for smoother seeking on very slow devices.
-- Trusted local CA with a QR-code install flow to remove the certificate warning.
+- QR-code install flow for the home CA.
+- Access from outside the home (a public domain, port 443, ACME certificate and a second factor) is deliberately not built in.
 - Optional per-device PIN for kids' devices.
 - Hardware transcoding (VAAPI/NVENC) when the VM has GPU passthrough.

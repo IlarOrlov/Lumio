@@ -7,6 +7,7 @@ const {
   securityHeaders, parseCookies, sendJson, sendError, readJson, loadStatic, sendFileRange, MIME,
 } = require('./http-util');
 const media = require('./media');
+const { caPaths } = require('./tls');
 
 const ID_RE = /^[0-9a-f]{20}$/;
 const SHOW_RE = /^[0-9a-f]{16}$/;
@@ -186,9 +187,10 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
       return sendJson(res, 200, helper.report(body.token, String(body.hostIp || '')));
     }
     if (m === 'GET' && p === '/lumio.crt' && cfg.https) {
-      // Public certificate (not secret) so phones/TVs can install it as trusted.
-      const pem = fs.readFileSync(cfg.tlsCert);
-      res.writeHead(200, { 'Content-Type': 'application/x-x509-ca-cert', 'Content-Disposition': 'attachment; filename="lumio.crt"', 'Content-Length': pem.length });
+      // The home CA certificate (public, not secret). Installing it once on a
+      // device makes the browser verify Lumio properly, with no warning.
+      const pem = fs.readFileSync(caPaths(cfg.tlsCert).cert);
+      res.writeHead(200, { 'Content-Type': 'application/x-x509-ca-cert', 'Content-Disposition': 'attachment; filename="Lumio-home-CA.crt"', 'Content-Length': pem.length, 'Cache-Control': 'no-store' });
       return res.end(pem);
     }
     if ((m === 'GET' || m === 'HEAD') && statics.has(p === '/' ? '/index.html' : p === '/login' ? '/login.html' : p)) {

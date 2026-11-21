@@ -90,6 +90,7 @@ class Sessions {
       renameDevice: db.prepare('UPDATE devices SET name = ? WHERE id = ?'),
       findByName: db.prepare('SELECT id FROM devices WHERE name = ? COLLATE NOCASE ORDER BY last_seen DESC LIMIT 1'),
       endAll: db.prepare('DELETE FROM sessions'),
+      deleteAllDevices: db.prepare('DELETE FROM devices'),
     };
   }
 
@@ -128,6 +129,8 @@ class Sessions {
   listDevices() { return this.q.listDevices.all(); }
   revokeDevice(id) { return this.q.deleteDevice.run(id).changes > 0; }
   renameDevice(id, name) { return this.q.renameDevice.run(name, id).changes > 0; }
+  /** Removes every device with its sessions and watch history. Returns how many. */
+  revokeAllDevices() { return Number(this.q.deleteAllDevices.run().changes); }
   /** Signs out every device (history is kept; devices sign in again by name). */
   endAllSessions() { this.q.endAll.run(); }
 }

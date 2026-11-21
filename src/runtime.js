@@ -4,9 +4,11 @@ const path = require('node:path');
 const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
-const { loadConfig, readRaw, writeRaw, resolveFromRoot, DEFAULTS } = require('./config');
+const { loadConfig, readRaw, writeRaw, resolveFromRoot, certHosts, DEFAULTS } = require('./config');
 const { randomToken, safeEqual } = require('./auth');
-const { generateCert, certInfo, localIps } = require('./tls');
+const { ensureCert, certInfo, localIps } = require('./tls');
+const { MdnsResponder } = require('./mdns');
+const { gatewayInfo } = require('./netinfo');
 const { buildWindowsHelper } = require('./winhelper');
 const { openDb } = require('./db');
 const { Sessions, LoginLimiter } = require('./auth');
@@ -16,6 +18,18 @@ const { Compactor } = require('./compact');
 const { createApp } = require('./app');
 const media = require('./media');
 const log = require('./log');
+
+// TLS 1.3 preferred; TLS 1.2 only with forward-secret AEAD suites (the key is
+// ECDSA P-256). Covers every browser and smart TV from the last ~8 years.
+const TLS_OPTIONS = {
+  minVersion: 'TLSv1.2',
+  ciphers: [
+    'TLS_AES_128_GCM_SHA256', 'TLS_AES_256_GCM_SHA384', 'TLS_CHACHA20_POLY1305_SHA256',
+    'ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-ECDSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-CHACHA20-POLY1305',
+  ].join(':'),
+  honorCipherOrder: true,
+  ecdhCurve: 'X25519:prime256v1:secp384r1',
+};
 
 /**
  * Owns the database and the streaming (LAN) listener. The admin console uses
@@ -39,6 +53,29 @@ class Runtime {
     this.compactor = new Compactor({ db: this.db, catalog: () => this.requireCatalog(), log });
     this.helperTokens = new Map(); // single-use Windows-helper token -> { exp, autoApply }
     this.pendingHost = null;       // address proposed by a viewer-downloaded helper
+    this.mdns = null;
+  }
+
+  /** Issues/renews the HTTPS certificate when names, IPs or expiry require it. */
+  refreshCert(raw = { ...DEFAULTS, ...(readRaw() || {}) }, { force = false } = {}) {
+    const r = ensureCert(resolveFromRoot(raw.tlsCert), resolveFromRoot(raw.tlsKey), certHosts(raw), { force });
+    if (r.caReplaced) log.warn('created a new Lumio home certificate authority: devices that installed the previous one need to install it again');
+    else if (r.caCreated) log.info('created the Lumio home certificate authority (install it on devices to remove browser warnings)');
+    if (r.renewed) log.info(`HTTPS certificate issued for ${(certInfo(resolveFromRoot(raw.tlsCert)) || { sans: [] }).sans.join(', ')}`);
+    return r;
+  }
+
+  tlsOptions(cfg) {
+    return { ...TLS_OPTIONS, cert: fs.readFileSync(cfg.tlsCert), key: fs.readFileSync(cfg.tlsKey) };
+  }
+
+  /** IP changed (DHCP, new router, VM network switched)? Re-issue and hot-swap the certificate. */
+  watchAddresses() {
+    if (!this.server || !this.cfg || !this.cfg.https) return;
+    try {
+      const r = this.refreshCert();
+      if (r.renewed && typeof this.server.setSecureContext === 'function') this.server.setSecureContext(this.tlsOptions(this.cfg));
+    } catch (e) { log.warn(`could not renew the certificate: ${e.message}`); }
   }
 
   /**
@@ -81,13 +118,10 @@ class Runtime {
   /** Stores the host PC address, renews the certificate (keeping existing names), restarts. */
   applyHost(hostIp) {
     if (!net.isIPv4(hostIp)) throw new Error('Invalid address');
-    const raw = { ...DEFAULTS, ...(readRaw() || {}) };
     const cur = readRaw() || {};
     writeRaw({ ...cur, publicHost: hostIp });
-    if (raw.https) {
-      const old = certInfo(resolveFromRoot(raw.tlsCert));
-      generateCert(resolveFromRoot(raw.tlsCert), resolveFromRoot(raw.tlsKey), [...new Set([...(old ? old.sans : []), hostIp])]);
-    }
+    const raw = { ...DEFAULTS, ...cur, publicHost: hostIp };
+    if (raw.https) this.refreshCert(raw);
     this.pendingHost = null;
     log.info(`host PC address set to ${hostIp}; certificate renewed`);
     setTimeout(() => this.restart(), 500); // after the response is sent
@@ -107,6 +141,8 @@ class Runtime {
     if (this.server) return;
     this.error = null;
     try {
+      const raw = { ...DEFAULTS, ...(readRaw() || {}) };
+      if (raw.https && raw.passwordHash) this.refreshCert(raw);
       const cfg = loadConfig();
       media.checkFfmpeg();
       this.cfg = cfg;
@@ -118,7 +154,7 @@ class Runtime {
         helper: { download: () => this.windowsHelper({ autoApply: false }), report: (t, ip) => this.hostReport(t, ip) },
       });
       const server = cfg.https
-        ? https.createServer({ cert: fs.readFileSync(cfg.tlsCert), key: fs.readFileSync(cfg.tlsKey), minVersion: 'TLSv1.2' }, this.handler)
+        ? https.createServer(this.tlsOptions(cfg), this.handler)
         : http.createServer(this.handler);
       server.headersTimeout = 15_000;
       server.requestTimeout = 30_000;
@@ -134,6 +170,11 @@ class Runtime {
       this.startedAt = Date.now();
       this.timers.push(setInterval(() => this.catalog && this.catalog.rescan(), cfg.rescanMinutes * 60_000));
       this.timers.push(setInterval(() => this.sessions.purgeExpired(), 3_600_000));
+      this.timers.push(setInterval(() => this.watchAddresses(), 30_000));
+      if (cfg.localName && cfg.mdns !== false) {
+        this.mdns = new MdnsResponder({ name: `${cfg.localName}.local`, log });
+        await this.mdns.start();
+      }
       log.info(`streaming on ${cfg.https ? 'https' : 'http'}://${cfg.host}:${cfg.port}`);
       if (!cfg.https) log.warn('HTTPS is off: the password and cookies travel unencrypted on your network.');
     } catch (e) {
@@ -146,6 +187,7 @@ class Runtime {
   async stop() {
     this.timers.forEach(clearInterval);
     this.timers = [];
+    if (this.mdns) { this.mdns.stop(); this.mdns = null; }
     if (this.server) {
       const s = this.server;
       this.server = null;
@@ -172,6 +214,8 @@ class Runtime {
       startedAt: this.startedAt,
       library: lib ? { movies, episodes, shows: lib.shows.size, bytes } : null,
       pendingHost: this.pendingHost,
+      localName: this.mdns ? this.mdns.status() : null,
+      network: gatewayInfo(),
       activeStreams: this.handler ? this.handler.active.remux + this.handler.active.transcode : 0,
       transcodes: this.handler ? this.handler.active.transcode : 0,
     };

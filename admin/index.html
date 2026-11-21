@@ -6,10 +6,13 @@
   <meta name="referrer" content="no-referrer">
   <title>Lumio Admin</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/display.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/admin.css">
+  <script src="/fx.js" defer></script>
   <script src="/admin.js" defer></script>
 </head>
 <body>
+  <canvas class="room" id="room" aria-hidden="true"></canvas>
   <div id="root"><div class="center muted">Loading…</div></div>
 </body>
 </html>

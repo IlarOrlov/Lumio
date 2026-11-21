@@ -201,10 +201,56 @@ test('Windows helper: CRLF batch with embedded PowerShell, validated inputs only
   assert.match(cmd, /"\$Port = \$\(\$VmIp\):\$Port"/);
   assert.match(cmd, /-Profile Private -RemoteAddress LocalSubnet/);
   assert.match(cmd, new RegExp(`LumioFp = '${fp}'`));
+  // minimal footprint: no backup copies or PowerShell caches, undo + self-delete offered
+  assert.ok(!/Copy-Item/.test(cmd), 'never writes backup copies');
+  assert.match(cmd, /set "PSModuleAnalysisCachePath=NUL"\r\n/);
+  assert.match(cmd, /\[2\] Undo/);
+  assert.match(cmd, /Remove-NetFirewallRule/);
+  assert.match(cmd, /\(goto\) 2>nul & del \/f \/q "%~f0"/);
+  assert.ok(!/[^\x00-\x7f]/.test(cmd), 'ASCII only (cmd.exe / Windows PowerShell 5.1)');
   for (const bad of [
     { vmIp: "1.2.3.4'; calc #", port: 8443, https: false, token: 'T'.repeat(43) },
     { vmIp: '192.168.204.128', port: '8443; x', https: false, token: 'T'.repeat(43) },
     { vmIp: '192.168.204.128', port: 8443, https: true, fingerprint: "AB'", token: 'T'.repeat(43) },
     { vmIp: '192.168.204.128', port: 8443, https: false, token: "x'; y" },
   ]) assert.throws(() => buildWindowsHelper(bad));
+});
+
+test('mDNS: answers A queries for exactly our name, legacy unicast echoes the question, rejects malformed packets', () => {
+  const { MdnsResponder, parsePacket, buildResponse } = require('../src/mdns');
+  const sent = [];
+  const r = new MdnsResponder({ name: 'lumio.local', log: {}, getInterfaces: () => [{ address: '192.168.1.20', netmask: '255.255.255.0' }, { address: '10.9.0.5', netmask: '255.255.0.0' }] });
+  r.sock = { send: (buf, port, addr) => sent.push({ buf, port, addr }) };
+  const query = (name, type = 1, id = 0x1234) => {
+    const labels = name.split('.').map((l) => Buffer.concat([Buffer.from([l.length]), Buffer.from(l)]));
+    const hdr = Buffer.alloc(12); hdr.writeUInt16BE(id, 0); hdr.writeUInt16BE(1, 4);
+    const tail = Buffer.alloc(4); tail.writeUInt16BE(type, 0); tail.writeUInt16BE(1, 2);
+    return Buffer.concat([hdr, ...labels, Buffer.from([0]), tail]);
+  };
+  r.onMessage(query('LUMIO.local'), { address: '192.168.1.50', port: 5353 });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].addr, '224.0.0.251');
+  const ans = parsePacket(sent[0].buf);
+  assert.ok(ans.isResponse);
+  assert.deepEqual(ans.answers, [{ name: 'lumio.local', ip: '192.168.1.20' }], 'answers with the address on the asker\'s subnet');
+
+  r.onMessage(query('lumio.local', 1, 0xbeef), { address: '192.168.1.50', port: 40000 });
+  const legacy = sent[1];
+  assert.equal(legacy.addr, '192.168.1.50'); assert.equal(legacy.port, 40000);
+  const lp = parsePacket(legacy.buf);
+  assert.equal(lp.id, 0xbeef); assert.equal(lp.questions[0].name, 'lumio.local');
+
+  r.onMessage(query('other.local'), { address: '192.168.1.50', port: 5353 });
+  r.onMessage(query('lumio.local', 28), { address: '192.168.1.50', port: 5353 });
+  r.onMessage(query('lumio.local'), { address: '8.8.8.8', port: 5353 });
+  assert.equal(sent.length, 2, 'ignores other names, AAAA, and public senders');
+
+  const loop = Buffer.concat([Buffer.alloc(12), Buffer.from([0xc0, 12, 0, 1, 0, 1])]);
+  loop.writeUInt16BE(1, 4);
+  assert.equal(parsePacket(loop), null, 'compression pointer loop rejected');
+  assert.equal(parsePacket(Buffer.alloc(5)), null);
+
+  // conflict: another host answering for our name with a foreign address
+  r.onMessage(buildResponse('lumio.local', ['192.168.1.99']), { address: '192.168.1.99', port: 5353 });
+  assert.equal(r.status().conflict.ip, '192.168.1.99');
 });

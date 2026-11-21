@@ -12,6 +12,7 @@ const DEFAULTS = {
   adminPort: 8442,
   https: true,
   publicHost: '',
+  localName: 'lumio',
   tlsCert: 'config/tls/cert.pem',
   tlsKey: 'config/tls/key.pem',
   mediaDirs: [],
@@ -52,6 +53,20 @@ function isValidHostName(h) {
   return net.isIP(h) !== 0 || /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$/i.test(h);
 }
 
+/** "lumio" -> devices open https://lumio.local:<port>. One DNS label, lowercase. */
+function isValidLocalName(n) {
+  return typeof n === 'string' && /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(n);
+}
+
+/** Every name/address the HTTPS certificate must cover for this config. */
+function certHosts(c) {
+  return [
+    c.publicHost,
+    isValidLocalName(c.localName) ? `${c.localName}.local` : '',
+    ...(Array.isArray(c.allowedHosts) ? c.allowedHosts : []),
+  ].filter(Boolean).map((h) => String(h).toLowerCase());
+}
+
 function validateMediaDir(d) {
   if (typeof d !== 'string' || !d.trim()) throw new Error('Empty media folder');
   let real;
@@ -78,6 +93,8 @@ function loadConfig(file = CONFIG_PATH) {
   cfg.tlsKey = resolveFromRoot(cfg.tlsKey);
   cfg.allowedHosts = cfg.allowedHosts.map((h) => String(h).toLowerCase());
   if (cfg.publicHost && net.isIP(cfg.publicHost) === 0) cfg.allowedHosts.push(cfg.publicHost.toLowerCase());
+  if (cfg.localName && !isValidLocalName(cfg.localName)) throw new Error('Local name must be one word: letters, digits and dashes.');
+  if (cfg.localName) cfg.allowedHosts.push(`${cfg.localName}.local`);
   if (cfg.https && (!fs.existsSync(cfg.tlsCert) || !fs.existsSync(cfg.tlsKey))) {
     throw new Error('HTTPS is on but no certificate exists yet. Generate one in Network & Security.');
   }
@@ -85,6 +102,6 @@ function loadConfig(file = CONFIG_PATH) {
 }
 
 module.exports = {
-  loadConfig, readRaw, writeRaw, validateMediaDir, isValidHostName, resolveFromRoot,
+  loadConfig, readRaw, writeRaw, validateMediaDir, isValidHostName, isValidLocalName, certHosts, resolveFromRoot,
   CONFIG_PATH, ROOT, DEFAULTS,
 };

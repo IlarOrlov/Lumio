@@ -11,7 +11,7 @@ const MEDIA = path.join(TMP, 'media');
 fs.mkdirSync(MEDIA);
 process.env.LUMIO_CONFIG = path.join(TMP, 'lumio.json');
 fs.writeFileSync(process.env.LUMIO_CONFIG, JSON.stringify({
-  dataDir: path.join(TMP, 'data'), tlsCert: path.join(TMP, 'tls', 'cert.pem'), tlsKey: path.join(TMP, 'tls', 'key.pem'),
+  dataDir: path.join(TMP, 'data'), mdns: false, tlsCert: path.join(TMP, 'tls', 'cert.pem'), tlsKey: path.join(TMP, 'tls', 'key.pem'),
 }), { mode: 0o600 });
 
 const test = require('node:test');
@@ -90,7 +90,12 @@ test('admin console access control and first-run setup', async (t) => {
   assert.equal(after.json.configured, true);
   assert.equal(after.json.running, true);
   assert.ok(after.json.config.cert.sans.includes('192.168.1.77'), 'cert covers the host PC IP');
-  assert.equal(after.json.config.url, 'https://192.168.1.77:18555');
+  assert.equal(after.json.config.url, 'https://lumio.local:18555', 'devices use the local name');
+  assert.equal(after.json.config.ipUrl, 'https://192.168.1.77:18555');
+  assert.ok(after.json.config.cert.sans.includes('lumio.local'));
+  assert.equal(after.json.config.cert.signedByCa, true, 'server certificate is signed by the home CA');
+  assert.ok(after.json.config.ca.names.includes('lumio.local'), 'CA is name-constrained to Lumio');
+  assert.equal(fs.statSync(path.join(TMP, 'tls', 'ca-key.pem')).mode & 0o777, 0o600);
   assert.equal(after.json.config.passwordHash, undefined, 'hash never sent to the browser');
   const raw = JSON.parse(fs.readFileSync(process.env.LUMIO_CONFIG, 'utf8'));
   assert.equal(fs.statSync(process.env.LUMIO_CONFIG).mode & 0o777, 0o600);
@@ -111,14 +116,34 @@ test('admin console access control and first-run setup', async (t) => {
   st2 = await a.call('/api/status');
   assert.equal(st2.json.config.publicHost, '192.168.1.60');
   assert.equal(st2.json.pendingHost, null);
-  // Admin download: applies directly; certificate keeps earlier names
+  // Admin download: applies directly; certificate follows the new address
   const adminTok = tokOf(a.runtime.windowsHelper({ autoApply: true }));
   assert.deepEqual(a.runtime.hostReport(adminTok, '192.168.1.50'), { ok: true, pending: false });
   st2 = await a.call('/api/status');
   assert.equal(st2.json.config.publicHost, '192.168.1.50');
   assert.ok(st2.json.config.cert.sans.includes('192.168.1.50'));
-  assert.ok(st2.json.config.cert.sans.includes('192.168.1.60'), 'SANs merged, not replaced');
+  assert.ok(st2.json.config.cert.sans.includes('lumio.local'), 'local name kept');
+  const caBefore = st2.json.config.ca.fingerprint;
   await new Promise((r) => setTimeout(r, 900)); // let the deferred restart finish
+
+  // a new local name re-issues the certificate (and the name-constrained CA)
+  assert.equal((await a.call('/api/config', { localName: 'Bad Name!' })).status, 400);
+  assert.equal((await a.call('/api/config', { localName: 'cinema' })).status, 200);
+  st2 = await a.call('/api/status');
+  assert.equal(st2.json.config.url, 'https://cinema.local:18555');
+  assert.ok(st2.json.config.cert.sans.includes('cinema.local'));
+  assert.notEqual(st2.json.config.ca.fingerprint, caBefore);
+  // renewing keeps the CA (devices don't need to re-install it)
+  const caNow = st2.json.config.ca.fingerprint;
+  assert.equal((await a.call('/api/cert', {})).status, 200);
+  assert.equal((await a.call('/api/status')).json.config.ca.fingerprint, caNow);
+
+  // remove all devices
+  a.runtime.sessions.createDeviceSession('Phone', 'ua');
+  a.runtime.sessions.createDeviceSession('TV', 'ua');
+  const ra = await a.call('/api/devices/revoke-all', {});
+  assert.equal(ra.json.removed, 2);
+  assert.equal((await a.call('/api/devices')).json.length, 0);
 
   // stop / start
   await a.call('/api/server', { action: 'stop' });

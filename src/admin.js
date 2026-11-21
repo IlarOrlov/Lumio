@@ -9,11 +9,11 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readRaw, writeRaw, validateMediaDir, isValidHostName, resolveFromRoot, DEFAULTS } = require('./config');
+const { readRaw, writeRaw, validateMediaDir, isValidHostName, isValidLocalName, resolveFromRoot, DEFAULTS } = require('./config');
 const { hashPassword, safeEqual, randomToken } = require('./auth');
 const { createNetworkGuard } = require('./netguard');
 const { securityHeaders, parseCookies, sendJson, sendError, readJson, loadStatic } = require('./http-util');
-const { generateCert, certInfo, localIps } = require('./tls');
+const { certInfo, caInfo, caPaths, localIps } = require('./tls');
 const service = require('./service');
 const log = require('./log');
 
@@ -23,6 +23,9 @@ const COOKIE = 'lumio_admin';
 
 function createAdmin(runtime, { keys, port }) {
   const statics = loadStatic(path.join(__dirname, '..', 'admin'));
+  // Shared visual effects and typeface from the viewer app.
+  const shared = loadStatic(path.join(__dirname, '..', 'public'));
+  for (const f of ['/fx.js', '/fonts/display.woff2']) if (shared.has(f)) statics.set(f, shared.get(f));
   const sessions = new Map(); // sid -> { csrf, exp }
   let failures = 0;
   let lockedUntil = 0;
@@ -56,14 +59,20 @@ function createAdmin(runtime, { keys, port }) {
     const c = rawCfg();
     const certPath = resolveFromRoot(c.tlsCert);
     const cert = certInfo(certPath);
-    const urlHost = c.publicHost || localIps()[0] || '127.0.0.1';
+    const ipHost = c.publicHost || localIps()[0] || '127.0.0.1';
+    const scheme = c.https ? 'https' : 'http';
+    const nameHost = c.localName ? `${c.localName}.local` : '';
     return {
+      localName: c.localName || '',
+      nameUrl: nameHost ? `${scheme}://${nameHost}:${c.port}` : null,
+      ipUrl: `${scheme}://${ipHost}:${c.port}`,
+      ca: c.https ? caInfo(certPath) : null,
       port: c.port, https: c.https, publicHost: c.publicHost, mediaDirs: c.mediaDirs,
       allowedNetworks: c.allowedNetworks, allowedHosts: c.allowedHosts, sessionDays: c.sessionDays,
       maxTranscodes: c.maxTranscodes, rescanMinutes: c.rescanMinutes,
       hasPassword: /^scrypt\$/.test(c.passwordHash || ''),
       vmIps: localIps(),
-      url: `${c.https ? 'https' : 'http'}://${urlHost}:${c.port}`,
+      url: `${scheme}://${nameHost || ipHost}:${c.port}`,
       cert: cert ? { ...cert, coversPublicHost: !c.publicHost || cert.sans.includes(c.publicHost) } : null,
     };
   }
@@ -85,6 +94,11 @@ function createAdmin(runtime, { keys, port }) {
       const h = String(b.publicHost).trim().toLowerCase();
       if (h && !isValidHostName(h)) throw new Error('Host PC address must be an IP address or hostname');
       patch.publicHost = h;
+    }
+    if (b.localName !== undefined) {
+      const n = String(b.localName).trim().toLowerCase().replace(/\.local$/, '');
+      if (n && !isValidLocalName(n)) throw new Error('Local name: one word with letters, digits or dashes (e.g. "lumio" or "cinema")');
+      patch.localName = n;
     }
     if (b.allowedNetworks !== undefined) {
       if (!Array.isArray(b.allowedNetworks) || !b.allowedNetworks.length) throw new Error('Keep at least one allowed network');
@@ -109,9 +123,7 @@ function createAdmin(runtime, { keys, port }) {
   }
 
   function regenerateCert() {
-    const c = rawCfg();
-    generateCert(resolveFromRoot(c.tlsCert), resolveFromRoot(c.tlsKey), [c.publicHost]);
-    log.info('new TLS certificate generated');
+    runtime.refreshCert(rawCfg(), { force: true });
   }
 
   function listDir(p) {
@@ -167,12 +179,9 @@ function createAdmin(runtime, { keys, port }) {
     }
     if (m === 'POST' && p === '/api/config') {
       const patch = validatePatch(await readJson(req));
-      const before = rawCfg();
       save(patch);
       const c = rawCfg();
-      if (c.https && (!certInfo(resolveFromRoot(c.tlsCert)) || (patch.publicHost !== undefined && patch.publicHost !== before.publicHost))) {
-        regenerateCert();
-      }
+      if (c.https) runtime.refreshCert(c);
       if (runtime.isConfigured()) await runtime.restart();
       return sendJson(res, 200, { ok: true, error: runtime.error });
     }
@@ -192,8 +201,9 @@ function createAdmin(runtime, { keys, port }) {
       return sendJson(res, 200, { ok: true, error: runtime.error });
     }
     if (m === 'GET' && p === '/api/cert.pem') {
-      const pem = fs.readFileSync(resolveFromRoot(rawCfg().tlsCert));
-      res.writeHead(200, { 'Content-Type': 'application/x-pem-file', 'Content-Disposition': 'attachment; filename="lumio.crt"' });
+      // The home CA (public, not secret): installing it removes browser warnings.
+      const pem = fs.readFileSync(caPaths(resolveFromRoot(rawCfg().tlsCert)).cert);
+      res.writeHead(200, { 'Content-Type': 'application/x-x509-ca-cert', 'Content-Disposition': 'attachment; filename="Lumio-home-CA.crt"' });
       return res.end(pem);
     }
     if (m === 'GET' && p === '/api/windows-helper') {
@@ -259,6 +269,11 @@ function createAdmin(runtime, { keys, port }) {
           }),
         };
       }));
+    }
+    if (m === 'POST' && p === '/api/devices/revoke-all') {
+      const n = runtime.sessions.revokeAllDevices();
+      log.info(`all devices removed (${n}); every device has to sign in again`);
+      return sendJson(res, 200, { ok: true, removed: n });
     }
     if (m === 'POST' && (p === '/api/devices/rename' || p === '/api/devices/revoke')) {
       const b = await readJson(req);

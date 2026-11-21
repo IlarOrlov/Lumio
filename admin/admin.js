@@ -6,6 +6,7 @@
   var status = null;
   var page = 'overview';
   var pollTimer = null;
+  var stage = window.LumioFX ? LumioFX.beam(document.getElementById('room'), { power: 0.55, ignite: true }) : null;
 
   // ---------- helpers ----------
   function h(tag, attrs) {
@@ -179,8 +180,9 @@
             .catch(function (e) { err.textContent = e.message; }));
         } }, 'Finish setup ✓');
         body = [h('h2', { text: '3. How devices reach Lumio' }),
-          h('p', { class: 'muted', text: 'Lumio runs inside this virtual machine. Phones and TVs connect to your Windows PC, which forwards the connection here.' }),
-          field('Your Windows PC\'s home-network IP address', host, 'On Windows open Command Prompt → "ipconfig" → IPv4 Address of your Wi-Fi/Ethernet adapter. You can fill this in later.'),
+          h('p', { class: 'muted', text: 'Devices open Lumio by name: https://lumio.local:' + st.port + '. The name follows Lumio when its IP address changes.' }),
+          h('p', { class: 'muted', text: 'Running in a VMware VM? Set the VM\'s network adapter to Bridged, so phones and TVs reach it directly and nothing has to be installed on the Windows PC. Only if you keep NAT, enter the Windows PC\'s address here.' }),
+          field('Windows PC address (only for VMware NAT, optional)', host, 'Leave empty with Bridged networking. With NAT: on Windows run "ipconfig" and copy the IPv4 Address of your Wi-Fi or Ethernet adapter.'),
           h('div', { class: 'grid2' }, field('Port', port, 'Default 8443')),
           h('p', { class: 'hint', text: 'Lumio always uses HTTPS. Each device shows a one-time certificate warning, which you can accept.' }), err,
           h('div', { class: 'row' }, h('button', { class: 'btn', onclick: function () { st.step = 1; render(); } }, '← Back'), finish)];
@@ -203,14 +205,14 @@
   function shell() {
     root.textContent = '';
     var nav = PAGES.map(function (p) {
-      return h('button', { class: 'navbtn' + (p[0] === page ? ' active' : ''), 'data-page': p[0], onclick: function () { go(p[0]); } }, p[1], p[2]);
+      return h('button', { class: 'navbtn' + (p[0] === page ? ' active' : ''), 'data-page': p[0], onclick: function () { go(p[0]); } }, h('span', { class: 'ico', 'aria-hidden': 'true', text: p[1] }), h('span', { text: p[2] }));
     });
     mainEl = h('main', { class: 'main' });
     root.appendChild(h('div', { class: 'shell' },
       h('aside', { class: 'side' },
         h('div', { class: 'brand' }, h('img', { src: '/icon.svg', width: '30', height: '30', alt: '' }), h('div', null, 'Lumio', h('small', { text: 'Admin console' }))),
         nav, h('div', { class: 'spacer' }),
-        h('button', { class: 'navbtn', onclick: quit }, '⏻', 'Quit Lumio')),
+        h('button', { class: 'navbtn', onclick: quit }, h('span', { class: 'ico', 'aria-hidden': 'true', text: '⏻' }), h('span', { text: 'Quit Lumio' }))),
       mainEl));
     go(page);
   }
@@ -242,15 +244,28 @@
     return h('span', { class: 'pill off', text: 'Stopped' });
   }
 
+  /** Shown when the VM sits behind VMware NAT: Bridged needs no change on Windows. */
+  function bridgedGuide(c) {
+    return h('div', { class: 'panel warnbox' },
+      h('h2', { text: 'Other devices can\'t reach this VM yet' }),
+      h('p', { class: 'muted', text: 'The VM uses VMware NAT, which hides it from your home network (and hides the lumio.local name). The clean fix needs nothing installed on Windows:' }),
+      h('ol', { class: 'steps' },
+        h('li', null, 'In VMware, select this VM and open ', h('strong', { text: 'VM, Settings, Network Adapter' }), '.'),
+        h('li', null, 'Choose ', h('strong', { text: 'Bridged: Connected directly to the physical network' }), ' and click OK. Leave "Replicate physical network connection state" off.'),
+        h('li', null, 'Wait about 20 seconds. Lumio picks up its new address and updates its certificate automatically.'),
+        h('li', null, 'On your phone open ', h('code', { text: c.nameUrl || c.url }), '.')),
+      h('p', { class: 'hint', text: 'This only changes the VM\'s own settings file, not Windows. If your Wi-Fi blocks bridging (rare at home), use the Windows helper in Network & Security instead.' }));
+  }
+
   // ---------- overview ----------
   function overview() {
     return refreshStatus().then(function (s) {
       var c = s.config;
       pollTimer = setInterval(function () { if (page === 'overview') refreshStatus().then(function () { go('overview'); }); }, 10000);
       var ctl = s.running
-        ? [h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/server', { action: 'restart' })).then(function () { go('overview'); }); } }, '↻ Restart'),
-          h('button', { class: 'btn danger', onclick: function (e) { busy(e.target, api('/api/server', { action: 'stop' })).then(function () { go('overview'); }); } }, '■ Stop streaming')]
-        : [h('button', { class: 'btn primary', onclick: function (e) { busy(e.target, api('/api/server', { action: 'start' })).then(function () { go('overview'); }); } }, '▶ Start streaming')];
+        ? [h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/server', { action: 'restart' })).then(function () { go('overview'); }); } }, 'Restart'),
+          h('button', { class: 'btn danger', onclick: function (e) { busy(e.target, api('/api/server', { action: 'stop' })).then(function () { go('overview'); }); } }, 'Stop streaming')]
+        : [h('button', { class: 'btn primary', onclick: function (e) { busy(e.target, api('/api/server', { action: 'start' })).then(function () { go('overview'); }); } }, 'Start streaming')];
       var lib = s.library || { movies: 0, shows: 0, episodes: 0, bytes: 0 };
       var warnings = [];
       if (s.pendingHost) {
@@ -261,23 +276,26 @@
             h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/host/dismiss', {})).then(function () { go('overview'); }); } }, 'Dismiss'))));
       }
       if (s.error) warnings.push(h('div', { class: 'panel' }, h('strong', { class: 'err', text: 'Lumio couldn\'t start: ' }), s.error));
-      if (!c.publicHost) {
-        warnings.push(h('div', { class: 'panel' }, h('strong', { text: '⚠ Add your Windows PC\'s IP address' }),
-          h('p', { class: 'muted', text: 'Phones and TVs reach Lumio through your Windows PC. Enter its address so the link and certificate match.' }),
-          h('button', { class: 'btn', onclick: function () { go('network'); } }, 'Open Network & Security')));
-      } else if (c.https && c.cert && !c.cert.coversPublicHost) {
+      var nat = s.network && s.network.mode === 'vmware-nat';
+      if (nat && !c.publicHost) warnings.push(bridgedGuide(c));
+      if (s.localName && s.localName.conflict) {
+        warnings.push(h('div', { class: 'panel warnbox' }, h('strong', { text: 'Another device on your network also calls itself ' + s.localName.name }),
+          h('p', { class: 'muted', text: 'Pick a different local name in Network & Security so every device finds the right Lumio.' })));
+      }
+      if (c.https && c.cert && !c.cert.coversPublicHost) {
         warnings.push(h('div', { class: 'panel' }, h('strong', { text: '⚠ Certificate doesn\'t include ' + c.publicHost }),
           h('p', null, h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/cert', {})).then(function () { toast('Certificate renewed'); go('overview'); }); } }, 'Fix certificate'))));
       }
+      setTimeout(function () { if (stage) stage.aimAt(document.getElementById('address')); }, 50);
       return [
         h('div', { class: 'head' }, h('div', null, h('h1', { text: 'Overview' }), h('span', { class: 'muted small', text: s.running ? 'Up since ' + new Date(s.startedAt).toLocaleTimeString() : '' })),
           h('div', { class: 'row' }, statusPill(s), ctl)),
-        h('div', { class: 'panel hl' },
-          h('h2', { text: 'Watch on any device in your home' }),
-          h('p', { class: 'muted', text: 'Open this address in the browser of your phone, TV, tablet or laptop:' }),
-          h('div', { class: 'url mono', text: c.url }),
-          h('p', { class: 'hint', text: 'First visit on each device: accept the certificate warning ("Advanced" → "Proceed"), then sign in with the household password.' }),
-          h('div', { class: 'row' }, h('a', { class: 'btn', href: 'https://127.0.0.1:' + c.port + '/', target: '_blank', rel: 'noopener noreferrer' }, 'Open Lumio on this computer ↗'))),
+        h('div', { class: 'address', id: 'address' },
+          h('p', { class: 'muted', text: 'On any phone, TV, tablet or laptop in your home, open' }),
+          h('span', { class: 'big', text: c.url }),
+          c.nameUrl ? h('p', { class: 'alt' }, 'Device can\'t open .local names? Use ', h('code', { text: c.ipUrl }), nat && !c.publicHost ? ' (works only after the network setup below)' : '') : null,
+          h('p', { class: 'hint', text: 'Sign in with the household password and any name for the device. To avoid the certificate warning, install Lumio\'s certificate once per device (Network & Security).' }),
+          h('div', { class: 'row' }, h('a', { class: 'btn', href: 'https://127.0.0.1:' + c.port + '/', target: '_blank', rel: 'noopener noreferrer' }, 'Open Lumio on this computer'))),
         warnings,
         h('div', { class: 'cards' },
           h('div', { class: 'stat' }, h('b', { text: String(lib.movies) }), h('span', { class: 'muted', text: 'Movies' })),
@@ -311,7 +329,7 @@
     return api('/api/library').catch(function () { return { movies: [], shows: [] }; }).then(function (lib) {
       return [
         h('div', { class: 'head' }, h('h1', { text: 'Library' }),
-          h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/rescan', {})).then(function (l) { toast('Found ' + l.movies + ' movies, ' + l.shows + ' series'); go('library'); }).catch(function (er) { toast(er.message, true); }); } }, '↻ Rescan now')),
+          h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/rescan', {})).then(function (l) { toast('Found ' + l.movies + ' movies, ' + l.shows + ' series'); go('library'); }).catch(function (er) { toast(er.message, true); }); } }, 'Rescan now')),
         h('div', { class: 'panel' }, h('h2', { text: 'Media folders' }), dirs,
           h('div', { class: 'row' }, h('button', { class: 'btn', onclick: function () {
             pickFolder(c.mediaDirs[0]).then(function (p) { if (p && c.mediaDirs.indexOf(p) < 0) saveDirs(c.mediaDirs.concat([p])); });
@@ -357,7 +375,11 @@
               } }, 'Remove'))),
           h('details', null, h('summary', { text: 'Watch history' }), hist));
       });
-      return [h('div', { class: 'head' }, h('div', null, h('h1', { text: 'Devices' }), h('p', { class: 'muted', text: 'Every device keeps its own history and resume points.' }))),
+      var removeAll = list.length ? h('button', { class: 'btn danger', onclick: function (e) {
+        if (!confirm('Remove all ' + list.length + ' device(s)? Every device is signed out and its watch history is deleted. Each one signs in again with the household password.')) return;
+        busy(e.target, api('/api/devices/revoke-all', {})).then(function (r) { toast('Removed ' + r.removed + ' device(s)'); go('devices'); }).catch(function (er) { toast(er.message, true); });
+      } }, 'Remove all devices') : null;
+      return [h('div', { class: 'head' }, h('div', null, h('h1', { text: 'Devices' }), h('p', { class: 'muted', text: 'Every device keeps its own history and resume points.' })), removeAll),
         items.length ? h('div', null, items) : h('div', { class: 'panel' }, h('p', { class: 'muted', text: 'No devices yet. Open the Lumio address on a phone or TV and sign in.' }))];
     });
   }
@@ -366,8 +388,10 @@
   function network() {
     return refreshStatus().then(function (s) {
       var c = s.config;
-      var host = h('input', { type: 'text', value: c.publicHost, placeholder: 'e.g. 192.168.1.20' });
+      var host = h('input', { type: 'text', value: c.publicHost, placeholder: 'empty with Bridged networking' });
+      var lname = h('input', { type: 'text', value: c.localName, placeholder: 'lumio', maxlength: '63', spellcheck: 'false' });
       var port = h('input', { type: 'number', value: String(c.port), min: '1024', max: '65535' });
+      var nat = s.network && s.network.mode === 'vmware-nat';
       var https = h('input', { type: 'checkbox', checked: c.https });
       var addrErr = h('p', { class: 'err', role: 'alert' });
       var p1 = h('input', { type: 'password', autocomplete: 'new-password' });
@@ -388,25 +412,36 @@
         }).catch(function (e) { msgEl.className = 'err'; msgEl.textContent = e.message; }));
       }
       var certPanel = c.cert ? [
-        h('p', null, 'Valid for: ', c.cert.sans.map(function (x, i) { return h('span', null, i ? ', ' : '', h('code', { text: x })); })),
-        h('p', { class: 'hint', text: 'Expires ' + c.cert.validTo }),
-        h('p', { class: 'hint mono', text: 'SHA-256 ' + c.cert.fingerprint }),
+        h('p', { class: 'muted', text: 'Lumio encrypts everything with TLS 1.3 (TLS 1.2 only with forward-secret ciphers). Its own small certificate authority signs the server certificate; that authority can only vouch for Lumio\'s names and private home addresses, never for real websites.' }),
+        h('p', null, 'Server certificate valid for: ', c.cert.sans.map(function (x, i) { return h('span', null, i ? ' ' : '', h('code', { text: x })); })),
+        h('p', { class: 'hint', text: 'Renews itself automatically (expires ' + c.cert.validTo + ', ' + c.cert.daysLeft + ' days left).' }),
+        c.ca ? h('p', { class: 'fp mono', text: 'Lumio home CA SHA-256: ' + c.ca.fingerprint }) : null,
+        h('h3', { text: 'Remove the browser warning on a device' }),
+        h('p', { class: 'muted small', text: 'Download the certificate on the device itself from ' + (c.nameUrl || c.url) + '/lumio.crt (or with the button below), then:' }),
+        h('ul', { class: 'steps small' },
+          h('li', null, h('strong', { text: 'Android: ' }), 'Settings, Security, More security settings, Install from storage, CA certificate.'),
+          h('li', null, h('strong', { text: 'iPhone/iPad: ' }), 'open the file, Settings, Profile Downloaded, Install. Then General, About, Certificate Trust Settings, turn on Lumio home CA.'),
+          h('li', null, h('strong', { text: 'Windows: ' }), 'double-click the file, Install Certificate, Current User, "Trusted Root Certification Authorities". This adds one registry entry; skip it to keep the PC untouched and accept the warning instead.'),
+          h('li', null, h('strong', { text: 'Mac: ' }), 'open the file in Keychain Access, then set it to Always Trust.')),
+        h('p', { class: 'hint', text: 'Check the fingerprint above matches what the device shows before trusting it.' }),
       ] : [h('p', { class: 'muted', text: 'No certificate yet.' })];
       return [
         h('div', { class: 'head' }, h('h1', { text: 'Network & Security' })),
         h('div', { class: 'panel' }, h('h2', { text: 'Address' }),
           h('div', { class: 'grid2' },
-            field('Windows PC IP address (what devices type)', host, 'From "ipconfig" on Windows. The certificate is renewed automatically when this changes.'),
-            field('Port', port, 'Must match the VMware port forwarding rule.')),
+            field('Local name', h('div', { class: 'suffix' }, lname, h('span', { text: '.local' })), 'Devices open https://' + (c.localName || 'lumio') + '.local:' + c.port + '. It keeps working when the IP changes. ' + (s.localName ? (s.localName.active ? 'Active.' : 'Not active: ' + (s.localName.error || 'streaming is stopped')) : '')),
+            field('Port', port, nat ? 'Must match the VMware port forwarding rule.' : 'Default 8443.')),
+          h('div', { class: 'grid2 mt' },
+            field('Windows PC address (VMware NAT only)', host, nat ? 'From "ipconfig" on Windows. Not needed with Bridged networking.' : 'Leave empty: this VM is directly on your network.')),
           h('label', { class: 'check', style: 'margin-top:12px' }, https, h('span', null, h('strong', { text: 'Use HTTPS (recommended)' }), h('div', { class: 'hint', text: 'Encrypts the password and video traffic on your network. Turn off only for very old TVs.' }))),
-          h('p', { class: 'hint', text: 'This virtual machine\'s address: ' + (c.vmIps.join(', ') || 'unknown') }), addrErr,
-          h('button', { class: 'btn primary', onclick: function (e) { saveCfg(e.target, { publicHost: host.value, port: Number(port.value), https: https.checked }, addrErr); } }, 'Save & restart')),
-        h('div', { class: 'panel hl' }, h('h2', { text: 'Connect from your home network (VMware NAT)' }),
-          h('p', { class: 'muted', text: 'Easiest: on the Windows PC open ' }, h('code', { text: c.url.replace(/\/\/[^:/]+/, '//' + (c.vmIps[0] || 'VM-IP')) }),
-            ', sign in, go to Settings and download the Windows setup helper. Double-click it and it does all of this automatically (and fills in the PC\'s address here).'),
-          h('div', { class: 'row' }, h('a', { class: 'btn', href: '/api/windows-helper', download: 'Lumio-Windows-Setup.cmd' }, '⬇ Download Windows setup helper'),
-            h('span', { class: 'hint', text: 'or download it here and copy it to Windows (VMware drag & drop / shared folder).' })),
-          h('h3', { text: 'Manual steps' }),
+          h('p', { class: 'hint', text: 'This machine\'s address: ' + (c.vmIps.join(', ') || 'unknown') + (s.network ? '. Network: ' + ({ 'vmware-nat': 'VMware NAT (hidden from other devices)', 'virtualbox-nat': 'VirtualBox NAT (hidden from other devices)', lan: 'directly on your home network', unknown: 'unknown' })[s.network.mode] : '') }), addrErr,
+          h('button', { class: 'btn primary', onclick: function (e) { saveCfg(e.target, { localName: lname.value, publicHost: host.value, port: Number(port.value), https: https.checked }, addrErr); } }, 'Save & restart')),
+        nat ? bridgedGuide(c) : null,
+        h('div', { class: 'panel' }, h('h2', { text: nat ? 'Or keep NAT: Windows helper' : 'VMware NAT (not needed now)' }),
+          h('p', { class: 'muted', text: 'Only for VMs that must stay on NAT. The helper adds one port-forward line and one home-network-only firewall rule on the Windows PC. It writes no backups, logs or caches, offers Undo, and deletes itself when done.' }),
+          h('div', { class: 'row' }, h('a', { class: 'btn', href: '/api/windows-helper', download: 'Lumio-Windows-Setup.cmd' }, 'Download Windows helper'),
+            h('span', { class: 'hint', text: 'Copy it to a USB stick or a non-system drive and run it from there to keep C: untouched.' })),
+          h('h3', { text: 'Manual NAT steps (no helper)' }),
           h('ol', { class: 'steps' },
             h('li', null, 'In VMware Workstation open ', h('strong', { text: 'Edit → Virtual Network Editor' }), ' and click ', h('strong', { text: 'Change Settings' }), '.'),
             h('li', null, 'Select ', h('strong', { text: 'VMnet8 (NAT)' }), ' → ', h('strong', { text: 'NAT Settings…' }), ' → ', h('strong', { text: 'Add…' })),
@@ -414,11 +449,10 @@
             h('li', null, 'When Windows asks about the firewall for vmnat.exe, allow ', h('strong', { text: 'Private networks only' }), '. Make sure your home Wi-Fi is set to ', h('em', { text: 'Private' }), ' in Windows settings.'),
             h('li', null, 'On a phone open ', h('code', { text: c.url }), '.')),
           h('p', { class: 'hint', text: 'Never forward this port on your internet router. Lumio is meant for your home only.' })),
-        h('div', { class: 'panel' }, h('h2', { text: 'Certificate' }), certPanel,
+        h('div', { class: 'panel' }, h('h2', { text: 'Encryption & certificate' }), certPanel,
           h('div', { class: 'row' },
-            h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/cert', {})).then(function () { toast('New certificate created'); go('network'); }).catch(function (er) { toast(er.message, true); }); } }, '↻ Renew certificate'),
-            c.cert ? h('a', { class: 'btn', href: '/api/cert.pem', download: 'lumio.crt' }, '⬇ Download certificate') : null),
-          h('p', { class: 'hint', text: 'Optional: install this certificate as trusted on a device to remove the browser warning. Devices can also download it from ' + c.url + '/lumio.crt' })),
+            c.cert ? h('a', { class: 'btn primary', href: '/api/cert.pem', download: 'Lumio-home-CA.crt' }, 'Download Lumio\'s certificate') : null,
+            h('button', { class: 'btn', onclick: function (e) { busy(e.target, api('/api/cert', {})).then(function () { toast('Server certificate renewed'); go('network'); }).catch(function (er) { toast(er.message, true); }); } }, 'Renew server certificate'))),
         h('div', { class: 'panel' }, h('h2', { text: 'Household password' }),
           h('div', { class: 'grid2' }, field('New password (min 12 characters)', p1), field('Repeat', p2)),
           h('label', { class: 'check', style: 'margin-top:10px' }, signout, h('span', null, 'Sign out all devices (they keep their history when they sign in again with the same name)')),

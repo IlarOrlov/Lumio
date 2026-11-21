@@ -11,6 +11,12 @@
  * All values are generated server-side from validated config (IP literals,
  * integers, hex fingerprint, base64url token), so nothing user-controlled is
  * interpolated into the script.
+ *
+ * Minimal footprint on the Windows drive: the only changes are the one NAT
+ * line and the one firewall rule (plus what the user explicitly confirms). No
+ * backup copies, logs, temp files or PowerShell caches are written
+ * (PSModuleAnalysisCachePath=NUL), "Undo" removes Lumio's changes again, and
+ * the helper offers to delete itself when it's done.
  */
 const net = require('node:net');
 
@@ -34,20 +40,65 @@ function Step($t) { Write-Host ''; Write-Host "==> $t" -ForegroundColor Yellow }
 function Ok($t) { Write-Host "    OK  $t" -ForegroundColor Green }
 function Warn($t) { Write-Host "    !   $t" -ForegroundColor DarkYellow }
 function Ask($q) { $a = Read-Host "    $q [Y/n]"; return ($a -eq '' -or $a -match '^[yY]') }
+$conf = Join-Path $env:ProgramData 'VMware\vmnetnat.conf'
+$RuleName = 'Lumio (VMware NAT)'
+$global:LumioExit = 0
+function Restart-Nat {
+  $svc = Get-Service | Where-Object { $_.DisplayName -like 'VMware NAT*' } | Select-Object -First 1
+  if (-not $svc) { throw 'The "VMware NAT Service" was not found.' }
+  Restart-Service -InputObject $svc -Force
+}
+function Read-Conf {
+  if (-not (Test-Path -LiteralPath $conf)) { throw "VMware NAT settings not found ($conf). Is VMware Workstation installed and the VM's network set to NAT?" }
+  $l = New-Object System.Collections.Generic.List[string]
+  Get-Content -LiteralPath $conf | ForEach-Object { $l.Add($_) }
+  return ,$l
+}
+function Write-Conf($l) {
+  # Same file, same place: no backup copies are left on the drive.
+  [System.IO.File]::WriteAllLines($conf, $l)
+  $old = "$conf.lumio-backup"
+  if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old -Force }
+}
+function Offer-SelfDelete {
+  Write-Host ''
+  if (Ask 'This helper file is no longer needed. Delete it now?') { $global:LumioExit = 10 }
+}
 Write-Host ''
 Write-Host '  Lumio - let phones and TVs in your home reach Lumio' -ForegroundColor Cyan
 Write-Host "  VM: $($VmIp):$Port" -ForegroundColor DarkGray
+Write-Host '  Tip: with the VM network set to "Bridged" in VMware, none of this is needed.' -ForegroundColor DarkGray
+Write-Host ''
+Write-Host '    [1] Set up access from phones and TVs (adds 1 NAT line + 1 firewall rule)'
+Write-Host '    [2] Undo: remove everything Lumio added to this PC'
+Write-Host '    [Q] Quit without changing anything'
+$choice = Read-Host '    Choose'
+if ($choice -eq '2') {
+  try {
+    Step 'Removing Lumio from this PC'
+    if (Test-Path -LiteralPath $conf) {
+      $lines = Read-Conf
+      $n = $lines.Count
+      for ($i = $lines.Count - 1; $i -ge 0; $i--) { if ($lines[$i] -match ("^\s*$Port\s*=\s*" + [regex]::Escape($VmIp) + ":$Port\s*$")) { $lines.RemoveAt($i) } }
+      if ($lines.Count -ne $n) { Write-Conf $lines; Restart-Nat; Ok 'Port forwarding removed' } else { Ok 'No Lumio port forwarding found' }
+    }
+    $r = @(Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue)
+    if ($r.Count -gt 0) { $r | Remove-NetFirewallRule; Ok 'Firewall rule removed' } else { Ok 'No Lumio firewall rule found' }
+    Warn 'If you switched your Wi-Fi to Private for Lumio and want it back: Settings > Network & internet > Wi-Fi > (your network) > Public.'
+    Offer-SelfDelete
+  } catch { Write-Host ''; Write-Host "  Undo failed: $($_.Exception.Message)" -ForegroundColor Red }
+  Write-Host ''
+  Read-Host '  Press Enter to close' | Out-Null
+  exit $global:LumioExit
+}
+if ($choice -notmatch '^1$') { exit 0 }
 try {
   Step 'VMware NAT port forwarding'
-  $conf = Join-Path $env:ProgramData 'VMware\vmnetnat.conf'
-  if (-not (Test-Path -LiteralPath $conf)) { throw "VMware NAT settings not found ($conf). Is VMware Workstation installed and the VM's network set to NAT?" }
-  $lines = New-Object System.Collections.Generic.List[string]
-  Get-Content -LiteralPath $conf | ForEach-Object { $lines.Add($_) }
+  $lines = Read-Conf
   $natLine = $lines | Where-Object { $_ -match '^\s*ip\s*=\s*(\d+\.\d+\.\d+)\.\d+' } | Select-Object -First 1
   if ($natLine -and $natLine -match '^\s*ip\s*=\s*(\d+\.\d+\.\d+)\.') {
     if (-not $VmIp.StartsWith($Matches[1] + '.')) { Warn "The VM ($VmIp) doesn't look like it's on this VMware NAT network ($($Matches[1]).x). Check the VM uses NAT." }
   }
-  if (-not (Test-Path -LiteralPath "$conf.lumio-backup")) { Copy-Item -LiteralPath $conf -Destination "$conf.lumio-backup" }
   $sec = -1
   for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\s*\[incomingtcp\]\s*$') { $sec = $i; break } }
   if ($sec -lt 0) { $lines.Add(''); $lines.Add('[incomingtcp]'); $sec = $lines.Count - 1 }
@@ -56,15 +107,13 @@ try {
     if ($lines[$i] -match "^\s*$Port\s*=") { $lines.RemoveAt($i) } else { $i++ }
   }
   $lines.Insert($sec + 1, "$Port = $($VmIp):$Port")
-  [System.IO.File]::WriteAllLines($conf, $lines)
-  $svc = Get-Service | Where-Object { $_.DisplayName -like 'VMware NAT*' } | Select-Object -First 1
-  if (-not $svc) { throw 'The "VMware NAT Service" was not found.' }
-  Restart-Service -InputObject $svc -Force
+  Write-Conf $lines
+  Restart-Nat
   Ok "Port $Port on this PC now forwards to the Lumio VM"
 
   Step 'Windows Firewall'
-  Get-NetFirewallRule -DisplayName 'Lumio (VMware NAT)' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-  New-NetFirewallRule -DisplayName 'Lumio (VMware NAT)' -Description 'Lets devices on your home network reach Lumio. Private networks and local subnet only.' -Direction Inbound -Protocol TCP -LocalPort $Port -Profile Private -RemoteAddress LocalSubnet -Action Allow | Out-Null
+  Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+  New-NetFirewallRule -DisplayName $RuleName -Description 'Lets devices on your home network reach Lumio. Private networks and local subnet only.' -Direction Inbound -Protocol TCP -LocalPort $Port -Profile Private -RemoteAddress LocalSubnet -Action Allow | Out-Null
   Ok "Allowed TCP $Port from your home network only (Private profile, local subnet)"
   $blocks = @(Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object { $_.Program -like '*vmnat.exe' } | Get-NetFirewallRule | Where-Object { $_.Action -eq 'Block' -and $_.Direction -eq 'Inbound' })
   if ($blocks.Count -gt 0) {
@@ -110,19 +159,29 @@ try {
   Write-Host '  All set!  On your phone, TV or tablet open:' -ForegroundColor Cyan
   Write-Host "      $($Scheme)://$($HostIp):$Port" -ForegroundColor White
   Write-Host '  (first time: accept the certificate warning, then sign in)' -ForegroundColor DarkGray
+  Write-Host '  To remove these changes later, download the helper again and choose Undo.' -ForegroundColor DarkGray
+  Offer-SelfDelete
 } catch {
   Write-Host ''
   Write-Host "  Setup failed: $($_.Exception.Message)" -ForegroundColor Red
 }
 Write-Host ''
 Read-Host '  Press Enter to close' | Out-Null
+exit $global:LumioExit
 `;
   const cmd = [
     '@echo off',
     'rem Lumio - Windows setup helper (generated by your Lumio server).',
     'rem Adds a VMware NAT port forward and a home-network-only firewall rule.',
-    'net session >nul 2>&1 || (powershell -NoProfile -Command "Start-Process -FilePath \'%~f0\' -Verb RunAs" & exit /b)',
+    'rem Writes no logs, backups, temp files or PowerShell caches; can undo itself.',
+    'setlocal',
+    'set "PSModuleAnalysisCachePath=NUL"',
+    'set "POWERSHELL_TELEMETRY_OPTOUT=1"',
+    'net session >nul 2>&1 || (powershell -NoProfile -NonInteractive -Command "Start-Process -FilePath \'%~f0\' -Verb RunAs" & exit /b)',
     'powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[IO.File]::ReadAllText(\'%~f0\'); iex $s.Substring($s.LastIndexOf(\'#__LUMIO_PS__\') + 13)"',
+    'if not errorlevel 10 exit /b',
+    'rem The user chose "delete this helper": remove this file after the script ends.',
+    '(goto) 2>nul & del /f /q "%~f0"',
     'exit /b',
     '#__LUMIO_PS__',
     ps.trim(),

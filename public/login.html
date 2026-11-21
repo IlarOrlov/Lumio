@@ -3,27 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b0c10">
+  <meta name="theme-color" content="#070a18">
   <meta name="referrer" content="no-referrer">
   <title>Sign in · Lumio</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="preload" href="/fonts/display.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css">
+  <script src="/fx.js" defer></script>
   <script src="/login.js" defer></script>
 </head>
 <body class="login-page">
-  <form class="login-card" id="login" autocomplete="on">
-    <img src="/icon.svg" alt="" width="56" height="56">
+  <canvas class="room" id="room" aria-hidden="true"></canvas>
+  <form class="login-card tilt" id="login" data-tilt="6" autocomplete="on" novalidate>
+    <input type="text" name="username" autocomplete="username" value="Lumio household" hidden>
+    <div class="lens"><img src="/icon.svg" alt="" width="74" height="74"></div>
     <h1>Lumio</h1>
-    <p class="muted">Your home cinema</p>
-    <label>Password
-      <input type="password" name="password" id="password" required autocomplete="current-password" maxlength="256" autofocus>
+    <p class="lede">Your home cinema. Sign this device in once and it remembers where you stopped.</p>
+
+    <label class="field">
+      <span class="field-label">Household password</span>
+      <div class="pw">
+        <input type="password" name="password" id="password" required autocomplete="current-password" maxlength="256" autofocus>
+        <button type="button" class="reveal" id="reveal" aria-controls="password">Show</button>
+      </div>
+      <span class="hint">The password chosen when Lumio was set up on the computer that runs it. Not your Windows, Wi-Fi or email password.</span>
     </label>
-    <label>Name this device
-      <input type="text" name="device" id="device" required maxlength="40" placeholder="Living room TV">
-    </label>
-    <p class="hint">Each device keeps its own watch history and resume points.</p>
+
+    <div class="field">
+      <label for="device" class="field-label">Name for this device</label>
+      <input type="text" name="device" id="device" required maxlength="40" autocomplete="off">
+      <div class="presets" id="presets" aria-label="Suggested names"></div>
+      <span class="hint">Any label you like, so you can tell your devices apart. Each name keeps its own watch history.</span>
+    </div>
+
     <button type="submit" class="btn primary">Sign in</button>
     <p class="error" id="error" role="alert"></p>
+    <p class="login-foot">Browser warns about the connection? Install <a href="/lumio.crt" download>Lumio's certificate</a> once on this device and the warning goes away.</p>
   </form>
 </body>
 </html>

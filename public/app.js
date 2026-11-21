@@ -4,7 +4,11 @@
 (function () {
   var view = document.getElementById('view');
   var searchBox = document.getElementById('search');
+  var whoEl = document.getElementById('who');
   var state = { me: null, library: null, progress: null };
+  var stage = window.LumioFX ? LumioFX.beam(document.getElementById('room'), { power: 0.9 }) : null;
+  if (window.LumioFX) LumioFX.tilt();
+  var DEFAULT_AIM = { x: 0.72, y: 0.4 };
 
   // ---------- helpers ----------
 
@@ -27,6 +31,30 @@
       else el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
     }
     return el;
+  }
+
+  var ICONS = {
+    play: 'M8 5.5v13l11-6.5z',
+    pause: 'M7 5h4v14H7zM13 5h4v14h-4z',
+    back: 'M15 5l-7 7 7 7',
+    rew: 'M12 5a7 7 0 1 1-6.6 4.7M5 4v5h5',
+    fwd: 'M12 5a7 7 0 1 0 6.6 4.7M19 4v5h-5',
+    full: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
+    next: 'M6 5.5v13l9-6.5zM17 5h2v14h-2z',
+    down: 'M12 4v11M7 10l5 5 5-5M5 20h14',
+  };
+  function icon(name) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    var path = document.createElementNS(NS, 'path');
+    path.setAttribute('d', ICONS[name]);
+    var filled = name === 'play' || name === 'pause' || name === 'next';
+    path.setAttribute('fill', filled ? 'currentColor' : 'none');
+    if (!filled) { path.setAttribute('stroke', 'currentColor'); path.setAttribute('stroke-width', '2'); path.setAttribute('stroke-linecap', 'round'); path.setAttribute('stroke-linejoin', 'round'); }
+    svg.appendChild(path);
+    return svg;
   }
 
   function api(path, body) {
@@ -68,9 +96,10 @@
   }
   function itemTitle(it) { return it.kind === 'episode' ? it.show : it.title; }
   function itemSub(it) {
-    if (it.kind === 'episode') return epCode(it) + ' · ' + it.title;
-    return [it.year, it.duration ? Math.round(it.duration / 60) + ' min' : null].filter(Boolean).join(' · ');
+    if (it.kind === 'episode') return epCode(it) + '  ' + it.title;
+    return [it.year, it.duration ? Math.round(it.duration / 60) + ' min' : null].filter(Boolean).join(', ');
   }
+  function seasonsText(n, eps) { return n + (n === 1 ? ' season, ' : ' seasons, ') + eps + ' episodes'; }
   function progressOf(id) { return state.progress && state.progress.map[id]; }
 
   // Which optional codecs this device can decode; the server then streams
@@ -116,36 +145,59 @@
 
   // ---------- cards ----------
 
+  function frame(id, extra) {
+    return h('div', { class: 'frame' }, thumb(id), extra);
+  }
   function continueCard(c) {
     var it = c.item;
     var label = c.upNext ? 'Up next' : fmtLeft(c.position, c.duration || it.duration);
-    return h('a', { class: 'card wide', href: '#/watch/' + it.id },
-      h('div', { class: 'poster' }, thumb(it.id),
-        h('span', { class: 'play-badge', 'aria-hidden': 'true' }, '▶'),
-        progressBar(c.upNext ? null : { position: c.position, duration: c.duration || it.duration })),
-      h('div', { class: 'meta' },
-        h('strong', { text: itemTitle(it) }),
-        h('span', { class: 'muted', text: (it.kind === 'episode' ? epCode(it) + ' · ' : '') + label })));
+    return h('a', { class: 'card tilt', href: '#/watch/' + it.id, 'data-tilt': '12' },
+      frame(it.id, [it.kind === 'episode' ? h('span', { class: 'chip', text: epCode(it) }) : null,
+        progressBar(c.upNext ? null : { position: c.position, duration: c.duration || it.duration })]),
+      h('div', { class: 'meta' }, h('strong', { text: itemTitle(it) }), h('span', { text: label })));
   }
   function movieCard(it) {
-    return h('a', { class: 'card', href: '#/watch/' + it.id },
-      h('div', { class: 'poster' }, thumb(it.id), progressBar(progressOf(it.id)),
-        progressOf(it.id) && progressOf(it.id).completed ? h('span', { class: 'check', title: 'Watched' }, '✓') : null),
-      h('div', { class: 'meta' }, h('strong', { text: it.title }), h('span', { class: 'muted', text: itemSub(it) })));
+    var p = progressOf(it.id);
+    return h('a', { class: 'card tilt', href: '#/watch/' + it.id, 'data-tilt': '12' },
+      frame(it.id, [progressBar(p), p && p.completed ? h('span', { class: 'check', title: 'Watched' }, '✓') : null]),
+      h('div', { class: 'meta' }, h('strong', { text: it.title }), h('span', { text: itemSub(it) })));
   }
   function showCard(s) {
-    return h('a', { class: 'card', href: '#/show/' + s.key },
-      h('div', { class: 'poster' }, thumb(s.thumbId)),
-      h('div', { class: 'meta' }, h('strong', { text: s.name }),
-        h('span', { class: 'muted', text: s.seasons + (s.seasons === 1 ? ' season' : ' seasons') + ' · ' + s.episodeCount + ' episodes' })));
+    return h('a', { class: 'card tilt', href: '#/show/' + s.key, 'data-tilt': '12' },
+      frame(s.thumbId),
+      h('div', { class: 'meta' }, h('strong', { text: s.name }), h('span', { text: seasonsText(s.seasons, s.episodeCount) })));
   }
-  function row(title, cards) {
+  function row(title, cards, opts) {
     if (!cards.length) return null;
-    return h('section', { class: 'row' }, h('h2', { text: title }), h('div', { class: 'scroller' }, cards));
+    opts = opts || {};
+    return h('section', { class: 'row' },
+      h('div', { class: 'row-head' }, h('h2', { text: title }), opts.note ? h('span', { class: 'muted', text: opts.note }) : null),
+      h('div', { class: 'scroller' + (opts.wide ? ' wide' : '') }, cards));
   }
   function grid(title, cards, empty) {
-    return h('section', { class: 'row' }, h('h2', { text: title }),
+    return h('section', { class: 'row' }, title ? h('div', { class: 'row-head' }, h('h2', { text: title })) : null,
       cards.length ? h('div', { class: 'grid' }, cards) : h('p', { class: 'muted', text: empty }));
+  }
+  function pageHead(title, sub) {
+    return h('section', { class: 'page-head' }, h('h1', { text: title }), sub ? h('p', { class: 'muted', text: sub }) : null);
+  }
+
+  /** The hero: a big 3D screen the projector beam lands on. */
+  function heroStage(o) {
+    var screen = h('a', { class: 'screen tilt', href: o.href, 'data-tilt': '8', 'aria-label': o.cta + ': ' + o.title },
+      h('div', { class: 'screen-img' }, thumb(o.thumbId, 'hero-img'), o.progress ? progressBar(o.progress) : null),
+      h('span', { class: 'play-orb', 'aria-hidden': 'true' }, icon('play')));
+    var node = h('section', { class: 'stage' },
+      h('div', { class: 'stage-copy' },
+        o.note ? h('p', { class: 'stage-note', text: o.note }) : null,
+        h('h1', { class: 'marquee', text: o.title }),
+        o.sub,
+        h('div', { class: 'actions' },
+          h('a', { class: 'btn primary', href: o.href }, icon('play'), o.cta),
+          o.secondary || null)),
+      h('div', { class: 'screen-wrap' }, screen));
+    node._screen = screen;
+    return node;
   }
 
   // ---------- views ----------
@@ -154,36 +206,56 @@
     var lib = state.library;
     var q = searchBox.value.trim().toLowerCase();
     if (q) return searchView(q);
+    if (!lib.movies.length && !lib.shows.length) {
+      return [h('section', { class: 'empty' }, h('h1', { class: 'marquee', text: 'Lights on, screen empty' }),
+        h('p', { class: 'muted', text: 'Lumio found no videos yet. Put MKV or MP4 files in your media folder, then choose Settings, Rescan media folders.' }))];
+    }
     var recent = lib.movies.map(function (m) { return { t: m.addedAt, el: function () { return movieCard(m); } }; })
       .concat(lib.shows.map(function (s) { return { t: s.addedAt, el: function () { return showCard(s); } }; }))
       .sort(function (a, b) { return b.t - a.t; }).slice(0, 20).map(function (x) { return x.el(); });
-    var cont = state.progress.cont.map(continueCard);
-    var nodes = [
-      cont.length
-        ? row('Continue watching on ' + state.me.deviceName, cont)
-        : h('section', { class: 'hero' }, h('h1', { text: 'Welcome to Lumio' }),
-          h('p', { class: 'muted', text: 'Start something and it will appear here, ready to resume on this device.' })),
+    var cont = state.progress.cont;
+    var hero;
+    if (cont.length) {
+      var c = cont[0], it = c.item;
+      hero = heroStage({
+        note: c.upNext ? 'Up next on ' + state.me.deviceName : 'Continue on ' + state.me.deviceName,
+        title: itemTitle(it), thumbId: it.id, href: '#/watch/' + it.id,
+        cta: c.upNext ? 'Play' : 'Resume',
+        progress: c.upNext ? null : { position: c.position, duration: c.duration || it.duration },
+        sub: h('p', { class: 'stage-sub' }, it.kind === 'episode' ? h('span', { class: 'code', text: epCode(it) }) : null,
+          h('strong', { text: it.kind === 'episode' ? it.title : itemSub(it) }),
+          h('span', { text: c.upNext ? 'ready when you are' : fmtLeft(c.position, c.duration || it.duration) })),
+        secondary: it.kind === 'episode' ? h('a', { class: 'btn', href: '#/show/' + it.showKey }, 'All episodes') : null,
+      });
+    } else {
+      var pick = lib.shows[0] ? { title: lib.shows[0].name, thumbId: lib.shows[0].thumbId, href: '#/show/' + lib.shows[0].key, sub: seasonsText(lib.shows[0].seasons, lib.shows[0].episodeCount) }
+        : { title: lib.movies[0].title, thumbId: lib.movies[0].id, href: '#/watch/' + lib.movies[0].id, sub: itemSub(lib.movies[0]) };
+      hero = heroStage({
+        note: 'Welcome, ' + state.me.deviceName, title: pick.title, thumbId: pick.thumbId, href: pick.href, cta: 'Start watching',
+        sub: h('p', { class: 'stage-sub' }, h('span', { text: pick.sub + '. Whatever you start here resumes on this device.' })),
+      });
+    }
+    return [
+      hero,
+      row('Continue watching', cont.slice(1).map(continueCard), { wide: true, note: 'on ' + state.me.deviceName }),
       row('Recently added', recent),
       row('Series', lib.shows.map(showCard)),
       row('Movies', lib.movies.map(movieCard)),
     ];
-    if (!lib.movies.length && !lib.shows.length) {
-      nodes.push(h('p', { class: 'muted pad', text: 'Your library is empty. Add MKV or MP4 files to your media folder, then use Settings → Rescan.' }));
-    }
-    return nodes;
   }
 
   function searchView(q) {
     var lib = state.library;
     var match = function (s) { return String(s).toLowerCase().indexOf(q) >= 0; };
     return [
+      pageHead('Results', 'Titles matching "' + searchBox.value.trim() + '"'),
       grid('Series', lib.shows.filter(function (s) { return match(s.name); }).map(showCard), 'No series match.'),
       grid('Movies', lib.movies.filter(function (m) { return match(m.title); }).map(movieCard), 'No movies match.'),
     ];
   }
 
-  function moviesView() { return [grid('Movies', state.library.movies.map(movieCard), 'No movies yet.')]; }
-  function seriesView() { return [grid('Series', state.library.shows.map(showCard), 'No series yet.')]; }
+  function moviesView() { return [pageHead('Movies', state.library.movies.length + ' in your library'), grid(null, state.library.movies.map(movieCard), 'No movies yet. Put them in a "Movies" folder inside your media folder.')]; }
+  function seriesView() { return [pageHead('Series', state.library.shows.length + ' in your library'), grid(null, state.library.shows.map(showCard), 'No series yet. Name episodes like "Show S01E01.mkv".')]; }
 
   function showView(key) {
     return api('/api/shows/' + key).then(function (show) {
@@ -197,32 +269,35 @@
 
       function renderSeason(sn) {
         current = sn;
-        Array.prototype.forEach.call(tabs.children, function (t) { t.classList.toggle('active', Number(t.dataset.season) === sn); });
+        Array.prototype.forEach.call(tabs.children, function (t) {
+          var on = Number(t.dataset.season) === sn;
+          t.classList.toggle('active', on);
+          t.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
         list.textContent = '';
         show.episodes.filter(function (e) { return e.season === sn; }).forEach(function (e) {
           var p = progressOf(e.id);
           list.appendChild(h('a', { class: 'episode', href: '#/watch/' + e.id },
-            h('div', { class: 'poster' }, thumb(e.id), progressBar(p)),
+            frame(e.id, progressBar(p)),
             h('div', { class: 'ep-meta' },
-              h('strong', { text: e.episode + '. ' + e.title }),
+              h('div', { class: 'ep-title' }, h('span', { class: 'num', text: String(e.episode) }), h('strong', { text: e.title })),
               h('span', { class: 'muted', text: [e.duration ? Math.round(e.duration / 60) + ' min' : null,
-                p && p.completed ? 'Watched' : p ? fmtLeft(p.position, p.duration) : null].filter(Boolean).join(' · ') })),
-            p && p.completed ? h('span', { class: 'check' }, '✓') : null));
+                p && p.completed ? 'watched' : p ? fmtLeft(p.position, p.duration) : null].filter(Boolean).join(', ') })),
+            p && p.completed ? h('span', { class: 'check', title: 'Watched' }, '✓') : null));
         });
       }
       seasons.forEach(function (sn) {
         tabs.appendChild(h('button', { class: 'tab', role: 'tab', 'data-season': sn, onclick: function () { renderSeason(sn); } }, 'Season ' + sn));
       });
       renderSeason(current);
-      return [
-        h('section', { class: 'show-head' },
-          h('h1', { text: show.name }),
-          h('p', { class: 'muted', text: show.seasons + (show.seasons === 1 ? ' season' : ' seasons') + ' · ' + show.episodeCount + ' episodes' }),
-          h('a', { class: 'btn primary', href: '#/watch/' + resume.id },
-            (rp && !rp.completed ? '▶ Continue ' : '▶ Play ') + epCode(resume))),
-        seasons.length > 1 ? tabs : null,
-        list,
-      ];
+      var hero = heroStage({
+        note: seasonsText(show.seasons, show.episodeCount),
+        title: show.name, thumbId: resume.id, href: '#/watch/' + resume.id,
+        cta: (rp && !rp.completed ? 'Continue ' : 'Play ') + epCode(resume),
+        progress: rp && !rp.completed ? rp : null,
+        sub: h('p', { class: 'stage-sub' }, h('span', { class: 'code', text: epCode(resume) }), h('strong', { text: resume.title })),
+      });
+      return [hero, seasons.length > 1 ? tabs : null, list];
     });
   }
 
@@ -242,53 +317,60 @@
             .then(loadProgress).then(render);
         } }, r.completed ? 'Mark unwatched' : 'Mark watched');
         return h('div', { class: 'hist' },
-          h('a', { href: '#/watch/' + r.id, class: 'poster small' }, thumb(r.id), progressBar(r)),
+          h('a', { href: '#/watch/' + r.id, class: 'card' }, frame(r.id, progressBar(r))),
           h('div', { class: 'ep-meta' }, h('strong', { text: itemTitle(it) }),
             h('span', { class: 'muted', text: itemSub(it) }),
-            h('span', { class: 'muted', text: (r.completed ? 'Watched ' : 'Stopped at ' + fmtTime(r.position) + ' · ') + ago(r.updatedAt) })),
+            h('span', { class: 'muted', text: (r.completed ? 'Watched ' : 'Stopped at ' + fmtTime(r.position) + ', ') + ago(r.updatedAt) })),
           toggle);
       });
-      return [h('h2', { class: 'pad', text: 'Watch history on ' + state.me.deviceName }), rows.length ? h('div', { class: 'history' }, rows) : h('p', { class: 'muted pad', text: 'Nothing watched on this device yet.' })];
+      return [pageHead('History', 'What ' + state.me.deviceName + ' has watched. Other devices keep their own.'),
+        rows.length ? h('div', { class: 'history' }, rows) : h('p', { class: 'empty', text: 'Nothing watched on this device yet.' })];
     });
   }
 
   function settingsView() {
     return api('/api/devices').then(function (d) {
       var nameInput = h('input', { type: 'text', maxlength: '40', value: state.me.deviceName, 'aria-label': 'Device name' });
-      var msg = h('span', { class: 'muted' });
+      var msg = h('span', { class: 'muted', role: 'status' });
       var devices = d.devices.map(function (dev) {
         var mine = dev.id === d.current;
         return h('div', { class: 'device' },
           h('div', null, h('strong', { text: dev.name + (mine ? ' (this device)' : '') }),
-            h('div', { class: 'muted', text: 'Last active ' + ago(dev.lastSeen) + ' · added ' + new Date(dev.createdAt).toLocaleDateString() })),
+            h('div', { class: 'muted small', text: 'Last active ' + ago(dev.lastSeen) + ', added ' + new Date(dev.createdAt).toLocaleDateString() })),
           h('button', { class: 'btn small danger', onclick: function () {
             if (!confirm('Sign out "' + dev.name + '" and delete its watch history?')) return;
             api('/api/devices/revoke', { id: dev.id }).then(function () { if (mine) location.replace('/login'); else render(); });
-          } }, mine ? 'Remove' : 'Revoke'));
+          } }, mine ? 'Remove' : 'Sign out'));
       });
+      var host = location.hostname;
       return [
+        pageHead('Settings'),
         h('section', { class: 'panel' }, h('h2', { text: 'This device' }),
           h('form', { class: 'inline', onsubmit: function (e) {
             e.preventDefault();
             api('/api/devices/rename', { name: nameInput.value }).then(function () {
-              state.me.deviceName = nameInput.value.trim(); msg.textContent = 'Saved';
+              state.me.deviceName = nameInput.value.trim(); whoEl.textContent = state.me.deviceName; msg.textContent = 'Renamed';
             }).catch(function (er) { msg.textContent = er.message; });
           } }, nameInput, h('button', { class: 'btn', type: 'submit' }, 'Rename'), msg),
-          h('p', { class: 'muted', text: 'Hardware decoding: H.264' + (caps ? ', ' + caps.toUpperCase().split(',').join(', ') : '') })),
+          h('p', { class: 'muted small', text: 'Plays directly on this device: H.264' + (caps ? ', ' + caps.toUpperCase().split(',').join(', ') : '') + '. Everything else is converted on the fly.' })),
         h('section', { class: 'panel' }, h('h2', { text: 'Signed-in devices' }), devices),
-        h('section', { class: 'panel' }, h('h2', { text: 'Watch on other devices in your home' }),
-          h('p', { class: 'muted', text: 'Lumio runs in a virtual machine on your Windows PC. On that PC, download this helper and double-click it: it forwards the port, opens the firewall for your home network only, and tells Lumio the PC\'s address.' }),
-          h('a', { class: 'btn', href: '/api/windows-helper', download: 'Lumio-Windows-Setup.cmd' }, '⬇ Download Windows setup helper'),
-          h('p', { class: 'muted small', text: 'Windows will ask for administrator permission. If SmartScreen warns about an unknown file, choose "More info" → "Run anyway".' })),
+        h('section', { class: 'panel' }, h('h2', { text: 'Open Lumio on other devices' }),
+          h('p', { class: 'muted', text: 'On any phone, tablet, TV or laptop on your home network, open:' }),
+          h('p', null, h('span', { class: 'code', text: 'https://' + (/\.local$/.test(host) ? host : 'lumio.local') + ':' + (location.port || '443') })),
+          h('p', { class: 'muted small', text: 'This name keeps working when Lumio\'s IP address changes. Devices that can\'t open .local names (some older TVs) can use the address in the Lumio admin console instead.' }),
+          h('p', { class: 'muted small' }, 'To stop browser warnings, install ', h('a', { href: '/lumio.crt', download: 'Lumio-home-CA.crt', class: 'link' }, 'Lumio\'s certificate'), ' once on each device.')),
+        h('section', { class: 'panel' }, h('h2', { text: 'Windows PC (VMware NAT only)' }),
+          h('p', { class: 'muted', text: 'Not needed when the Lumio VM\'s network adapter is set to Bridged in VMware. Only if you must keep NAT: this helper forwards the port and opens the firewall for your home network. It writes nothing else to the Windows drive, can undo its changes, and deletes itself when done.' }),
+          h('a', { class: 'btn', href: '/api/windows-helper', download: 'Lumio-Windows-Setup.cmd' }, icon('down'), 'Download Windows helper')),
         h('section', { class: 'panel' }, h('h2', { text: 'Library' }),
-          h('button', { class: 'btn', onclick: function (e) {
-            e.target.disabled = true;
-            api('/api/rescan', {}).then(function (r) { e.target.textContent = 'Found ' + r.count + ' files'; return loadAll(); });
-          } }, 'Rescan media folders'),
-          ' ',
-          h('button', { class: 'btn danger', onclick: function () {
-            api('/api/logout', {}).then(function () { location.replace('/login'); });
-          } }, 'Sign out')),
+          h('div', { class: 'inline' },
+            h('button', { class: 'btn', onclick: function (e) {
+              e.target.disabled = true;
+              api('/api/rescan', {}).then(function (r) { e.target.textContent = 'Found ' + r.count + ' files'; return loadAll(); });
+            } }, 'Rescan media folders'),
+            h('button', { class: 'btn danger', onclick: function () {
+              api('/api/logout', {}).then(function () { location.replace('/login'); });
+            } }, 'Sign out'))),
       ];
     });
   }
@@ -319,26 +401,27 @@
     var video = h('video', { class: 'video', playsinline: true, preload: 'auto', autoplay: true });
     var seek = h('input', { type: 'range', class: 'seek', min: '0', max: String(Math.floor(duration)), step: '1', value: '0', 'aria-label': 'Seek' });
     var timeEl = h('span', { class: 'time' });
-    var playBtn = h('button', { class: 'ctl', 'aria-label': 'Play/pause' }, '❚❚');
+    var playBtn = h('button', { class: 'ctl play', 'aria-label': 'Play or pause' }, icon('pause'));
+    function setPlayIcon(name) { playBtn.textContent = ''; playBtn.appendChild(icon(name)); }
     var spinner = h('div', { class: 'spinner', hidden: true });
     var title = h('div', { class: 'p-title' },
-      h('a', { href: d.kind === 'episode' ? '#/show/' + d.showKey : '#/', class: 'ctl back', 'aria-label': 'Back' }, '←'),
+      h('a', { href: d.kind === 'episode' ? '#/show/' + d.showKey : '#/', class: 'ctl back', 'aria-label': 'Back' }, icon('back')),
       h('div', null, h('strong', { text: itemTitle(d) }), h('div', { class: 'muted', text: itemSub(d) })));
 
     var audioSel = d.audio.length > 1 ? h('select', { class: 'sel', 'aria-label': 'Audio track' },
       d.audio.map(function (a) { return h('option', { value: String(a.index) }, a.label); })) : null;
     var subSel = d.subtitles.length ? h('select', { class: 'sel', 'aria-label': 'Subtitles' },
       [h('option', { value: '' }, 'Subtitles off')].concat(d.subtitles.map(function (s) { return h('option', { value: s.key }, s.label); }))) : null;
-    var nextBtn = d.next ? h('a', { class: 'ctl text', href: '#/watch/' + d.next.id }, 'Next ⏭') : null;
+    var nextBtn = d.next ? h('a', { class: 'ctl text', href: '#/watch/' + d.next.id, 'aria-label': 'Next episode' }, icon('next')) : null;
     var upNext = h('div', { class: 'upnext', hidden: true });
 
     var controls = h('div', { class: 'controls' }, seek,
       h('div', { class: 'ctl-row' },
         playBtn,
-        h('button', { class: 'ctl', 'aria-label': 'Back 10 seconds', onclick: function () { seekTo(now() - 10); } }, '↺10'),
-        h('button', { class: 'ctl', 'aria-label': 'Forward 30 seconds', onclick: function () { seekTo(now() + 30); } }, '30↻'),
+        h('button', { class: 'ctl', 'aria-label': 'Back 10 seconds', title: 'Back 10 s', onclick: function () { seekTo(now() - 10); } }, icon('rew')),
+        h('button', { class: 'ctl', 'aria-label': 'Forward 30 seconds', title: 'Forward 30 s', onclick: function () { seekTo(now() + 30); } }, icon('fwd')),
         timeEl, h('span', { class: 'grow' }), audioSel, subSel, nextBtn,
-        h('button', { class: 'ctl', 'aria-label': 'Fullscreen', onclick: toggleFs }, '⛶')));
+        h('button', { class: 'ctl', 'aria-label': 'Fullscreen', onclick: toggleFs }, icon('full'))));
 
     var el = h('div', { class: 'player' }, video, spinner, title, controls, upNext);
 
@@ -403,7 +486,7 @@
       var label = h('span');
       upNext.textContent = '';
       upNext.appendChild(h('div', null, h('div', { class: 'muted', text: 'Up next' }),
-        h('strong', { text: epCode(d.next) + ' · ' + d.next.title }), label));
+        h('strong', { text: epCode(d.next) + '  ' + d.next.title }), h('div', { class: 'muted' }, label)));
       upNext.appendChild(h('div', { class: 'upnext-btns' },
         h('a', { class: 'btn primary', href: '#/watch/' + d.next.id }, 'Play now'),
         h('button', { class: 'btn', onclick: function () { clearInterval(timer); upNext.hidden = true; } }, 'Cancel')));
@@ -419,12 +502,13 @@
     video.addEventListener('timeupdate', function () {
       var t = now();
       if (document.activeElement !== seek) seek.value = String(Math.floor(t));
+      seek.style.setProperty('--pct', (duration ? Math.min(100, t / duration * 100) : 0).toFixed(2) + '%');
       timeEl.textContent = fmtTime(t) + ' / ' + fmtTime(duration);
       save(false);
       if (d.next && duration - t < 25 && upNext.hidden && !el._shown) { el._shown = true; startUpNext(); }
     });
-    video.addEventListener('play', function () { playBtn.textContent = '❚❚'; poke(); });
-    video.addEventListener('pause', function () { playBtn.textContent = '▶'; el.classList.remove('idle'); save(true); });
+    video.addEventListener('play', function () { setPlayIcon('pause'); poke(); });
+    video.addEventListener('pause', function () { setPlayIcon('play'); el.classList.remove('idle'); save(true); });
     video.addEventListener('waiting', function () { spinner.hidden = false; });
     video.addEventListener('playing', function () { spinner.hidden = true; });
     video.addEventListener('canplay', function () { spinner.hidden = true; });
@@ -471,6 +555,7 @@
     }
     timeEl.textContent = fmtTime(resumeAt) + ' / ' + fmtTime(duration);
     document.body.classList.add('watching');
+    if (stage) stage.pause(); // the room goes dark while a film plays
 
     return {
       el: el,
@@ -486,6 +571,7 @@
         video.removeAttribute('src');
         video.load();
         document.body.classList.remove('watching');
+        if (stage) stage.resume();
         if (document.fullscreenElement) document.exitFullscreen().catch(function () {});
       },
     };
@@ -513,14 +599,33 @@
     }
     Promise.resolve(out).then(function (nodes) {
       view.textContent = '';
-      (Array.isArray(nodes) ? nodes : [nodes]).forEach(function (n) { if (n) view.appendChild(n); });
-      if (name !== 'watch') window.scrollTo(0, 0);
+      view.classList.remove('view-in');
+      var screen = null;
+      (Array.isArray(nodes) ? nodes : [nodes]).forEach(function (n) { if (n) { view.appendChild(n); if (n._screen) screen = n._screen; } });
+      if (name !== 'watch') {
+        window.scrollTo(0, 0);
+        void view.offsetWidth; // restart the entrance animation
+        view.classList.add('view-in');
+        aimBeam(screen);
+      }
     }).catch(function (e) {
       if (e.message === 'signed out') return;
       view.textContent = '';
       view.appendChild(h('p', { class: 'error pad', text: 'Something went wrong: ' + e.message }));
     });
   }
+
+  var aimTarget = null;
+  function aimBeam(target) {
+    aimTarget = target;
+    if (!stage) return;
+    // aim after the screen's swing-in settles, then keep it pointed on scroll/resize
+    stage.aimAt(target ? { x: 0.7, y: 0.45 } : DEFAULT_AIM);
+    if (target) setTimeout(function () { if (aimTarget === target) stage.aimAt(target); }, 900);
+  }
+  function reaim() { if (stage && aimTarget && document.body.contains(aimTarget)) stage.aimAt(aimTarget); }
+  addEventListener('scroll', reaim, { passive: true });
+  addEventListener('resize', reaim);
 
   var searchTimer;
   searchBox.addEventListener('input', function () {
@@ -535,6 +640,7 @@
 
   api('/api/me').then(function (me) {
     state.me = me;
+    whoEl.textContent = me.deviceName;
     return loadAll();
   }).then(render).catch(function () {});
 })();

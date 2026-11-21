@@ -13,8 +13,12 @@ Set up and run entirely from a desktop icon and a web admin console, with no ter
   thing you see. Finished an episode? The next one is waiting as *Up next*, with auto-play.
 - **Point-and-click admin console.** Setup wizard, folder picker, devices and their history,
   network and certificate settings, autostart, storage compaction and logs.
-- **Locked down.** HTTPS, scrypt, hashed session tokens, CSRF + Origin checks, strict CSP, LAN-only
-  allowlist, DNS-rebinding guard, loopback-only admin console, sandboxed ffmpeg.
+- **Found by name.** Devices open `https://lumio.local:8443`, which keeps working when the IP
+  address changes (built-in mDNS responder, home network only).
+- **Locked down.** TLS 1.3 with its own name-constrained home certificate authority (no warnings
+  once installed, can't vouch for real websites), scrypt, hashed session tokens, CSRF + Origin
+  checks, strict CSP with Trusted Types, LAN-only allowlist, DNS-rebinding guard, loopback-only
+  admin console, sandboxed ffmpeg.
   [Details →](docs/DESIGN.md#6-security-model)
 - **Storage-efficient.** Plays files in place with no copies or disk cache. *Slim audio* shrinks
   files ~15 % with the video stream kept bit-exact; AV1 re-encode for high-bitrate files. [Details →](docs/DESIGN.md#5-storage-efficiency)
@@ -33,15 +37,28 @@ Double-click **Lumio**. It starts in the background and opens the **admin consol
 
 - **First time:** a 3-step wizard asks for a household password, your video folders (click to browse)
   and your PC's address. That's all.
-- **Overview** shows the address to open on your phone/TV (e.g. `https://192.168.1.20:8443`),
-  start/stop, and a switch to *start automatically with the computer*.
+- **Overview** shows the address to open on your phone/TV (`https://lumio.local:8443`, plus the IP
+  address for devices that can't use `.local` names), start/stop, and a switch to *start
+  automatically with the computer*.
 - **Library**: add/remove folders, rescan. **Devices**: rename, remove, view watch history.
   **Network & Security**: address, port, HTTPS certificate, password. **Storage**: shrink files.
   **Logs**: what's happening.
 - **Quit Lumio** is at the bottom of the sidebar.
 
-On each phone/TV: open the address, accept the one-time certificate warning, enter the password and
-give the device a name. Each device keeps its own history.
+### Signing a device in
+
+1. Open `https://lumio.local:8443` in the device's browser (or the IP address shown on Overview).
+2. Certificate warning? Either click *Advanced* → *Proceed*, or install Lumio's certificate once
+   (link on the sign-in page; steps for each platform in *Network & Security*) and the warning is
+   gone for good.
+3. **Household password**: the password chosen in the setup wizard on the Lumio computer. It isn't
+   a Windows, Wi-Fi or email password. Forgot it? Set a new one in *Network & Security*.
+4. **Name for this device**: any label, e.g. `Living room TV` or `Phone`. It only keeps this
+   device's watch history apart from the others. Signing in again with the same name reattaches
+   that history.
+
+*Devices* in the admin console lists every signed-in device; **Remove all devices** signs them all
+out and deletes their history.
 
 ### Library layout
 
@@ -53,37 +70,35 @@ Videos/Series/The Mentalist/Season 1/The Mentalist S01E01.mp4    (+ ...S01E01.ru
 Episodes are recognised by `S01E02` (or `1x02`). Release tags (`1080p`, `x264`, …) are ignored.
 Optional `poster.jpg` in a folder is used as its cover.
 
-## Running inside a VMware VM (NAT)
+## Running inside a VMware VM
 
-With the VM on **NAT**, other devices can't reach the VM directly, so the Windows PC has to forward
-a port. **Automatic (recommended):** on the Windows PC open `https://<VM-IP>:8443` (the VM's
-address is shown in the admin console), sign in, go to **Settings → Download Windows setup helper**
-and double-click `Lumio-Windows-Setup.cmd`. After asking for admin rights it:
+**Recommended: Bridged networking (nothing to install on Windows).** In VMware select the VM →
+*VM → Settings → Network Adapter* → **Bridged: Connected directly to the physical network** → OK.
+The VM then gets its own address on your home network, `lumio.local` works for every device, and
+Lumio updates its certificate to the new address by itself. This changes only the VM's own settings
+file; Windows itself is not modified. The admin console detects VMware NAT and shows these steps.
 
-- adds the VMware NAT port forward and restarts the VMware NAT service
-- adds a firewall rule for **Private networks and your local subnet only**
+**Only if you must keep NAT:** the VM is hidden behind the Windows PC, which has to forward a
+port. On the Windows PC open the Lumio address, sign in, go to **Settings → Download Windows
+helper**, save it to a USB stick or non-system drive, and run it. After asking for admin rights it
+offers *Set up* or *Undo*. Set up:
+
+- adds one VMware NAT port forward line and restarts the VMware NAT service
+- adds one firewall rule for **Private networks and your local subnet only**
 - offers to remove old "block" rules for VMware NAT and to switch your Wi-Fi to *Private*
-- detects the PC's home-network IP and reports it to Lumio (single-use token, TLS pinned to Lumio's
-  certificate). Then click **Apply** on the admin console's Overview (helpers downloaded from the
-  admin console itself apply automatically)
-- prints the address to open on your phone
+- reports the PC's home-network IP to Lumio (single-use token, TLS pinned to Lumio's certificate);
+  confirm it with **Apply** on the admin console's Overview
 
-**Manual alternative** (also shown in the admin console with your addresses filled in):
-
-1. **VMware Workstation → Edit → Virtual Network Editor → Change Settings → VMnet8 (NAT) →
-   NAT Settings… → Add**: host port `8443`, TCP, VM IP (shown in the console), VM port `8443`.
-2. Allow the Windows firewall prompt for **Private networks only**, and make sure your home Wi-Fi is
-   a *Private* network in Windows.
-3. Enter your Windows PC's IP (`ipconfig`) in *Network & Security*. Lumio renews its certificate
-   to match.
-4. On a phone open `https://<Windows-PC-IP>:8443`.
+It writes no backups, logs, temp files or PowerShell caches, and offers to delete itself when done.
+*Undo* removes the forward and the firewall rule again. `lumio.local` doesn't work through NAT, so
+devices use `https://<Windows-PC-IP>:8443` in this mode.
 
 > Never forward this port on your internet router. Lumio is built for your home network only.
 
 ## For developers
 
 ```bash
-npm test     # 23 tests: security pipeline, per-device progress, admin console, parsing
+npm test     # 27 tests: security pipeline, TLS/CA, mDNS, per-device progress, admin console, parsing
 npm start    # run in the foreground instead of via the launcher
 ```
 
