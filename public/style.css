@@ -166,7 +166,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
 }
 .play-orb {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0; margin: auto; width: 84px; height: 84px; border-radius: 50%;
-  display: grid; place-items: center; color: var(--ink);
+  display: flex; align-items: center; justify-content: center; color: var(--ink);
   background: radial-gradient(circle at 35% 30%, #fff8e6, var(--lamp) 60%, #e89a3c);
   box-shadow: 0 0 0 10px rgba(255, 196, 107, .16), 0 0 50px rgba(255, 196, 107, .7);
   opacity: 0; scale: .85; transition: opacity .25s, scale .35s var(--ease);
@@ -218,7 +218,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
   color: var(--text); background: rgba(255, 255, 255, .06); border: 1px solid var(--line);
   transition: transform .2s var(--ease), background .2s, border-color .2s, box-shadow .2s;
 }
-.btn svg { width: 16px; height: 16px; flex: none; }
+.btn svg { display: block; width: 16px; height: 16px; flex: none; }
 .btn:hover { background: rgba(255, 255, 255, .1); border-color: rgba(255, 241, 208, .3); transform: translateY(-1px); }
 .btn:active { transform: translateY(1px) scale(.98); }
 .btn.primary {
@@ -276,7 +276,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
 .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--lamp), var(--glint)); box-shadow: 0 0 10px rgba(255, 196, 107, .8); }
 .check {
   position: absolute; top: 9px; right: 9px; width: 26px; height: 26px; border-radius: 50%;
-  display: grid; place-items: center; font-size: 13px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center; line-height: 1; font-size: 13px; font-weight: 800;
   background: var(--lamp); color: #1c1204; box-shadow: 0 0 16px rgba(255, 196, 107, .7);
 }
 .chip {
@@ -289,6 +289,16 @@ main { padding-bottom: 72px; perspective: 1400px; }
 .empty strong { color: var(--text); }
 
 /* ---------- show page ---------- */
+.ep-cards { padding: 0 var(--gutter); grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 30px 20px; }
+.ep-cards .card { min-width: 0; }
+.ep-cards .meta strong { font-size: 1rem; }
+.ep-cards .num-badge {
+  position: absolute; left: 10px; bottom: 12px; font: 900 2.4rem/1 var(--display); color: var(--beam);
+  text-shadow: 0 2px 14px rgba(0, 0, 0, .85);
+}
+@media (max-width: 560px) { .ep-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 12px; } .ep-cards .num-badge { font-size: 1.9rem; } }
+.fx-basic .ep-cards .num-badge { text-shadow: 0 1px 3px #000; }
+
 .tabs {
   position: relative; display: inline-flex; gap: 4px; margin: 6px var(--gutter) 18px; padding: 4px;
   border-radius: 999px; background: rgba(255, 255, 255, .05); border: 1px solid var(--line); max-width: calc(100% - 2 * var(--gutter)); overflow-x: auto;
@@ -471,12 +481,13 @@ input[type=text]:focus, input[type=password]:focus { outline: none; border-color
 .ctl-side.right { justify-content: flex-end; }
 .ctl-center { display: flex; align-items: center; gap: clamp(14px, 4vw, 34px); }
 .ctl {
-  flex: none; width: 46px; height: 46px; display: inline-grid; place-items: center; padding: 0;
+  /* flex centring works on <button> in every engine (grid on buttons doesn't in older ones) */
+  flex: none; width: 46px; height: 46px; display: -webkit-inline-box; display: inline-flex; align-items: center; justify-content: center; padding: 0; line-height: 0; text-decoration: none;
   background: rgba(255, 255, 255, .08); color: #fff; border: 1px solid rgba(255, 255, 255, .08); border-radius: 14px;
   font: 600 15px var(--body); cursor: pointer; transition: background .2s, transform .15s, color .2s;
   -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
 }
-.ctl svg { width: 21px; height: 21px; }
+.ctl svg { display: block; flex: none; width: 21px; height: 21px; margin: 0 auto; }
 .ctl:hover { background: rgba(255, 255, 255, .18); }
 .ctl:active { transform: scale(.92); }
 .ctl.on { color: var(--lamp); border-color: rgba(255, 196, 107, .45); }
@@ -507,7 +518,7 @@ input[type=text]:focus, input[type=password]:focus { outline: none; border-color
   background: linear-gradient(180deg, #fff8e6, var(--lamp));
   box-shadow: 0 14px 40px -10px rgba(0, 0, 0, .9), 0 0 40px -6px rgba(255, 196, 107, .8);
 }
-.skip-intro svg { width: 18px; height: 18px; }
+.skip-intro svg { display: block; width: 18px; height: 18px; }
 .skip-intro[hidden] { display: none; }
 .skip-intro.pop { animation: card-in .45s var(--ease) both; }
 .player.idle .skip-intro { bottom: 40px; } /* stays visible while the controls are hidden */

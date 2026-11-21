@@ -312,7 +312,7 @@
       var resume = show.episodes.find(function (e) { var p = progressOf(e.id); return !p || !p.completed; }) || show.episodes[0];
       var rp = progressOf(resume.id);
       var current = resume.season;
-      var list = h('div', { class: 'episodes' });
+      var list = h('div', { class: 'grid ep-cards' });
       var tabs = h('div', { class: 'tabs', role: 'tablist' });
 
       function renderSeason(sn) {
@@ -325,13 +325,14 @@
         list.textContent = '';
         show.episodes.filter(function (e) { return e.season === sn; }).forEach(function (e) {
           var p = progressOf(e.id);
-          list.appendChild(h('a', { class: 'episode', href: '#/watch/' + e.id },
-            frame(e.id, progressBar(p)),
-            h('div', { class: 'ep-meta' },
-              h('div', { class: 'ep-title' }, h('span', { class: 'num', text: String(e.episode) }), h('strong', { text: e.title })),
-              h('span', { class: 'muted', text: [e.duration ? Math.round(e.duration / 60) + ' min' : null,
-                p && p.completed ? 'watched' : p ? fmtLeft(p.position, p.duration) : null].filter(Boolean).join(', ') })),
-            p && p.completed ? h('span', { class: 'check', title: 'Watched' }, '✓') : null));
+          var named = !/^Episode \d+$/.test(e.title);
+          list.appendChild(h('a', { class: 'card tilt', href: '#/watch/' + e.id, 'data-tilt': '10' },
+            frame(e.id, [h('span', { class: 'chip', text: epCode(e) }), h('span', { class: 'num-badge', 'aria-hidden': 'true', text: String(e.episode) }),
+              progressBar(p), p && p.completed ? h('span', { class: 'check', title: 'Watched' }, '✓') : null]),
+            h('div', { class: 'meta' },
+              h('strong', { text: named ? e.title : 'Episode ' + e.episode }),
+              h('span', { text: [e.duration ? Math.round(e.duration / 60) + ' min' : null,
+                p && p.completed ? 'watched' : p ? fmtLeft(p.position, p.duration) : null].filter(Boolean).join(', ') }))));
         });
       }
       seasons.forEach(function (sn) {
