@@ -258,7 +258,7 @@ function createAdmin(runtime, { keys, port }) {
       return sendJson(res, 200, runtime.sessions.listDevices().map((d) => {
         const rows = runtime.progress.rows(d.id);
         return {
-          id: d.id, name: d.name, createdAt: d.created_at, lastSeen: d.last_seen,
+          id: d.id, name: d.name, createdAt: d.created_at, lastSeen: d.last_seen, isAdmin: d.is_admin === 1,
           watched: rows.filter((r) => r.completed).length,
           history: rows.slice(0, 30).map((r) => {
             const it = cat && cat.get(r.id);
@@ -274,6 +274,14 @@ function createAdmin(runtime, { keys, port }) {
       const n = runtime.sessions.revokeAllDevices();
       log.info(`all devices removed (${n}); every device has to sign in again`);
       return sendJson(res, 200, { ok: true, removed: n });
+    }
+    if (m === 'POST' && p === '/api/devices/admin') {
+      const b = await readJson(req);
+      if (!DEVICE_RE.test(String(b.id))) return sendError(res, 400, 'Invalid device');
+      const ok = runtime.sessions.setAdmin(b.id, !!b.admin);
+      const d = runtime.sessions.listDevices().find((x) => x.id === b.id);
+      if (ok) log.info(`"${d ? d.name : b.id}" ${b.admin ? 'is now an admin device' : 'is no longer an admin device'}`);
+      return sendJson(res, ok ? 200 : 404, { ok });
     }
     if (m === 'POST' && (p === '/api/devices/rename' || p === '/api/devices/revoke')) {
       const b = await readJson(req);

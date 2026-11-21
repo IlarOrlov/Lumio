@@ -328,23 +328,38 @@
     });
   }
 
+  /** Non-admin devices: their name and sign-out, nothing that changes Lumio. */
+  function deviceView() {
+    return [
+      pageHead(state.me.deviceName, 'This device keeps its own watch history and resume points.'),
+      h('section', { class: 'panel' }, h('h2', { text: 'Settings' }),
+        h('p', { class: 'muted', text: 'Settings are managed on admin devices. The owner can make a device an admin in the Lumio admin console on the computer that runs Lumio.' })),
+      h('section', { class: 'panel' }, h('h2', { text: 'Sign out' }),
+        h('p', { class: 'muted', text: 'Signing out ends this device\'s session. Sign in again with the same name to get its history back.' }),
+        h('button', { class: 'btn danger', onclick: function () {
+          api('/api/logout', {}).then(function () { location.replace('/login'); });
+        } }, 'Sign out')),
+    ];
+  }
+
   function settingsView() {
+    if (!state.me.isAdmin) return deviceView();
     return api('/api/devices').then(function (d) {
       var nameInput = h('input', { type: 'text', maxlength: '40', value: state.me.deviceName, 'aria-label': 'Device name' });
       var msg = h('span', { class: 'muted', role: 'status' });
       var devices = d.devices.map(function (dev) {
         var mine = dev.id === d.current;
         return h('div', { class: 'device' },
-          h('div', null, h('strong', { text: dev.name + (mine ? ' (this device)' : '') }),
+          h('div', null, h('strong', { text: dev.name + (mine ? ' (this device)' : '') }), dev.isAdmin ? h('span', { class: 'badge', text: 'Admin' }) : null,
             h('div', { class: 'muted small', text: 'Last active ' + ago(dev.lastSeen) + ', added ' + new Date(dev.createdAt).toLocaleDateString() })),
-          h('button', { class: 'btn small danger', onclick: function () {
+          dev.isAdmin && !mine ? h('span', { class: 'muted small', text: 'Managed in the admin console' }) : h('button', { class: 'btn small danger', onclick: function () {
             if (!confirm('Sign out "' + dev.name + '" and delete its watch history?')) return;
             api('/api/devices/revoke', { id: dev.id }).then(function () { if (mine) location.replace('/login'); else render(); });
           } }, mine ? 'Remove' : 'Sign out'));
       });
       var host = location.hostname;
       return [
-        pageHead('Settings'),
+        pageHead('Settings', 'This is an admin device. Other devices can\'t open settings unless you make them admins in the Lumio admin console.'),
         h('section', { class: 'panel' }, h('h2', { text: 'This device' }),
           h('form', { class: 'inline', onsubmit: function (e) {
             e.preventDefault();
@@ -594,7 +609,7 @@
       case 'movies': out = moviesView(); break;
       case 'series': out = seriesView(); break;
       case 'history': out = historyView(); break;
-      case 'settings': out = settingsView(); break;
+      case 'settings': case 'device': out = settingsView(); break;
       default: out = (name === 'home' ? loadProgress() : Promise.resolve()).then(homeView);
     }
     Promise.resolve(out).then(function (nodes) {
@@ -641,6 +656,11 @@
   api('/api/me').then(function (me) {
     state.me = me;
     whoEl.textContent = me.deviceName;
+    if (me.isAdmin) whoEl.classList.add('admin');
+    else {
+      var nav = document.querySelector('[data-nav="settings"]');
+      if (nav) nav.remove();
+    }
     return loadAll();
   }).then(render).catch(function () {});
 })();

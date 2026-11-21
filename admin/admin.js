@@ -363,9 +363,13 @@
         })) : h('p', { class: 'muted small', text: 'Nothing watched yet.' });
         return h('div', { class: 'panel' },
           h('div', { class: 'row between' },
-            h('div', null, h('strong', { text: d.name }),
+            h('div', null, h('strong', { text: d.name }), d.isAdmin ? h('span', { class: 'badge', text: 'Admin' }) : null,
               h('div', { class: 'hint', text: 'Last active ' + ago(d.lastSeen) + ' · added ' + new Date(d.createdAt).toLocaleDateString() + ' · ' + d.watched + ' watched' })),
             h('div', { class: 'row' },
+              h('button', { class: 'btn sm' + (d.isAdmin ? '' : ' primary'), onclick: function (e) {
+                if (!d.isAdmin && !confirm('Make "' + d.name + '" an admin device? It will be able to open Settings: see and sign out other devices, rescan the library and download the Windows helper.')) return;
+                busy(e.target, api('/api/devices/admin', { id: d.id, admin: !d.isAdmin })).then(function () { toast(d.isAdmin ? 'Admin rights removed' : d.name + ' is now an admin device'); go('devices'); }).catch(function (er) { toast(er.message, true); });
+              } }, d.isAdmin ? 'Remove admin' : 'Make admin'),
               h('button', { class: 'btn sm', onclick: function () {
                 var n = prompt('New name for this device', d.name);
                 if (n) api('/api/devices/rename', { id: d.id, name: n }).then(function () { go('devices'); }).catch(function (e) { toast(e.message, true); });
@@ -379,7 +383,7 @@
         if (!confirm('Remove all ' + list.length + ' device(s)? Every device is signed out and its watch history is deleted. Each one signs in again with the household password.')) return;
         busy(e.target, api('/api/devices/revoke-all', {})).then(function (r) { toast('Removed ' + r.removed + ' device(s)'); go('devices'); }).catch(function (er) { toast(er.message, true); });
       } }, 'Remove all devices') : null;
-      return [h('div', { class: 'head' }, h('div', null, h('h1', { text: 'Devices' }), h('p', { class: 'muted', text: 'Every device keeps its own history and resume points.' })), removeAll),
+      return [h('div', { class: 'head' }, h('div', null, h('h1', { text: 'Devices' }), h('p', { class: 'muted', text: 'Every device keeps its own history and resume points. Only admin devices can open Settings in Lumio; this console itself opens only on this computer.' })), removeAll),
         items.length ? h('div', null, items) : h('div', { class: 'panel' }, h('p', { class: 'muted', text: 'No devices yet. Open the Lumio address on a phone or TV and sign in.' }))];
     });
   }

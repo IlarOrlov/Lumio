@@ -91,6 +91,9 @@ p { margin: 0; }
   border: 1px solid var(--line); color: var(--haze); font-size: .85rem; white-space: nowrap;
 }
 .who::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--lamp); box-shadow: 0 0 10px var(--lamp); }
+.who:hover { color: var(--text); border-color: rgba(255, 241, 208, .3); }
+.who.admin::after { content: "Admin"; margin-left: 2px; padding: 1px 7px; border-radius: 999px; font-size: .72rem; font-weight: 700; color: #1c1204; background: var(--lamp); }
+.badge { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: .72rem; font-weight: 700; color: #1c1204; background: var(--lamp); vertical-align: 2px; }
 @media (max-width: 860px) {
   .topbar { flex-wrap: wrap; gap: 10px 14px; padding-top: 10px; padding-bottom: 10px; }
   .nav { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }

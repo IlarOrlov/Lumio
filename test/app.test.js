@@ -30,14 +30,15 @@ async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'] } = {}) {
     https: false, allowedNetworks, allowedHosts: [], sessionDays: 30, maxTranscodes: 1,
     passwordHash: await hashPassword(PASSWORD), dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-data-')),
   };
+  const sessions = new Sessions(db);
   const handler = createApp({
-    cfg, catalog, sessions: new Sessions(db), progress: new Progress(db),
+    cfg, catalog, sessions, progress: new Progress(db),
     limiter: new LoginLimiter({ maxPerWindow: 3 }), log: {},
   });
   const server = http.createServer(handler);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { server, base, catalog };
+  return { server, base, catalog, sessions };
 }
 
 async function req(base, p, { method = 'GET', body, cookie, csrf, headers = {} } = {}) {
@@ -170,9 +171,10 @@ test('unknown Host headers are refused (DNS rebinding)', async (t) => {
 });
 
 test('revoking a device kills its session and history', async (t) => {
-  const { server, base } = await setup();
+  const { server, base, sessions } = await setup();
   t.after(() => server.close());
   const a = await login(base);
+  sessions.setAdmin(a.me.deviceId, true);
   const b = await login(base, 'Phone');
   const r = await req(base, '/api/devices/revoke', { method: 'POST', cookie: a.cookie, csrf: a.csrf, body: { id: b.me.deviceId } });
   assert.equal(r.status, 200);
@@ -190,4 +192,34 @@ test('signing in again with the same device name keeps its history', async (t) =
   assert.equal(again.me.deviceId, a.me.deviceId);
   const p = await req(base, '/api/progress', { cookie: again.cookie });
   assert.equal(p.json.continue[0].position, 50);
+});
+
+test('settings are admin-only; adminship cannot be taken over by signing in with the admin\'s name', async (t) => {
+  const { server, base, sessions } = await setup();
+  t.after(() => server.close());
+  const owner = await login(base, 'Linux PC');
+  const guest = await login(base, 'Phone');
+  assert.equal(owner.me.isAdmin, false, 'nobody is admin until the admin console says so');
+  sessions.setAdmin(owner.me.deviceId, true);
+  assert.equal((await req(base, '/api/me', { cookie: owner.cookie })).json.isAdmin, true);
+
+  for (const [p, body] of [['/api/devices'], ['/api/windows-helper'], ['/api/rescan', {}], ['/api/devices/rename', { name: 'x' }], ['/api/devices/revoke', { id: owner.me.deviceId }]]) {
+    const r = await req(base, p, body ? { method: 'POST', cookie: guest.cookie, csrf: guest.csrf, body } : { cookie: guest.cookie });
+    assert.equal(r.status, 403, `guest blocked from ${p}`);
+  }
+  assert.equal((await req(base, '/api/library', { cookie: guest.cookie })).status, 200, 'guests can still watch');
+  assert.equal((await req(base, '/api/devices', { cookie: owner.cookie })).status, 200);
+
+  // Someone with the household password signs in using the admin device's name:
+  const impostor = await login(base, 'linux pc');
+  assert.notEqual(impostor.me.deviceId, owner.me.deviceId, 'does not re-attach to the admin device');
+  assert.equal(impostor.me.isAdmin, false);
+  assert.equal(impostor.me.deviceName, 'linux pc 2', 'gets a distinct name');
+  assert.equal((await req(base, '/api/devices', { cookie: impostor.cookie })).status, 403);
+
+  // an admin device can't be removed from another admin device (console only), but may remove itself
+  const second = await login(base, 'Laptop');
+  sessions.setAdmin(second.me.deviceId, true);
+  assert.equal((await req(base, '/api/devices/revoke', { method: 'POST', cookie: second.cookie, csrf: second.csrf, body: { id: owner.me.deviceId } })).status, 403);
+  assert.equal((await req(base, '/api/devices/revoke', { method: 'POST', cookie: second.cookie, csrf: second.csrf, body: { id: guest.me.deviceId } })).status, 200);
 });

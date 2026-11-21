@@ -12,6 +12,7 @@ const { caPaths } = require('./tls');
 const ID_RE = /^[0-9a-f]{20}$/;
 const SHOW_RE = /^[0-9a-f]{16}$/;
 const DEVICE_RE = /^[A-Za-z0-9_-]{16}$/;
+const ADMIN_ONLY = new Set(['/api/devices', '/api/devices/rename', '/api/devices/revoke', '/api/rescan', '/api/windows-helper']);
 
 function cleanName(v) {
   // Device names are shown in the UI; strip control chars and cap the length.
@@ -207,7 +208,12 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
     }
 
     if (m === 'GET' && p === '/api/me') {
-      return sendJson(res, 200, { deviceId: session.deviceId, deviceName: session.deviceName, csrf: session.csrf });
+      return sendJson(res, 200, { deviceId: session.deviceId, deviceName: session.deviceName, csrf: session.csrf, isAdmin: session.isAdmin });
+    }
+    // Settings (device management, rescans, the Windows helper) are for admin
+    // devices only. Adminship is granted in the admin console on the Lumio computer.
+    if (ADMIN_ONLY.has(p) && !session.isAdmin) {
+      return sendError(res, 403, 'Only admin devices can change settings. Ask the owner to make this device an admin in the Lumio admin console.');
     }
     if (m === 'POST' && p === '/api/logout') {
       sessions.destroy(session.tokenHash);
@@ -240,7 +246,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
     if (m === 'GET' && p === '/api/devices') {
       return sendJson(res, 200, {
         current: session.deviceId,
-        devices: sessions.listDevices().map((d) => ({ id: d.id, name: d.name, createdAt: d.created_at, lastSeen: d.last_seen })),
+        devices: sessions.listDevices().map((d) => ({ id: d.id, name: d.name, createdAt: d.created_at, lastSeen: d.last_seen, isAdmin: d.is_admin === 1 })),
       });
     }
     if (m === 'POST' && p === '/api/devices/rename') {
@@ -253,6 +259,10 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
     if (m === 'POST' && p === '/api/devices/revoke') {
       const body = await readJson(req);
       if (!DEVICE_RE.test(String(body.id))) return sendError(res, 400, 'Invalid device');
+      const target = sessions.listDevices().find((d) => d.id === body.id);
+      if (target && target.is_admin === 1 && body.id !== session.deviceId) {
+        return sendError(res, 403, 'Admin devices can only be removed in the Lumio admin console.');
+      }
       const ok = sessions.revokeDevice(body.id);
       if (body.id === session.deviceId) setSessionCookie(res, '', 0);
       return sendJson(res, ok ? 200 : 404, { ok });

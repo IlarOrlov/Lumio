@@ -80,15 +80,20 @@ class Sessions {
     this.q = {
       insertDevice: db.prepare('INSERT INTO devices (id, name, user_agent, created_at, last_seen) VALUES (?, ?, ?, ?, ?)'),
       insertSession: db.prepare('INSERT INTO sessions (token_hash, device_id, csrf, created_at, expires_at) VALUES (?, ?, ?, ?, ?)'),
-      find: db.prepare(`SELECT s.device_id, s.csrf, s.expires_at, d.name FROM sessions s
+      find: db.prepare(`SELECT s.device_id, s.csrf, s.expires_at, d.name, d.is_admin FROM sessions s
                         JOIN devices d ON d.id = s.device_id WHERE s.token_hash = ?`),
       touch: db.prepare('UPDATE devices SET last_seen = ? WHERE id = ?'),
       deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
       purge: db.prepare('DELETE FROM sessions WHERE expires_at < ?'),
-      listDevices: db.prepare('SELECT id, name, user_agent, created_at, last_seen FROM devices ORDER BY last_seen DESC'),
+      listDevices: db.prepare('SELECT id, name, user_agent, created_at, last_seen, is_admin FROM devices ORDER BY last_seen DESC'),
+      setAdmin: db.prepare('UPDATE devices SET is_admin = ? WHERE id = ?'),
+      adminNamed: db.prepare('SELECT 1 FROM devices WHERE name = ? COLLATE NOCASE AND is_admin = 1 LIMIT 1'),
       deleteDevice: db.prepare('DELETE FROM devices WHERE id = ?'),
       renameDevice: db.prepare('UPDATE devices SET name = ? WHERE id = ?'),
-      findByName: db.prepare('SELECT id FROM devices WHERE name = ? COLLATE NOCASE ORDER BY last_seen DESC LIMIT 1'),
+      // Only ordinary devices can be re-attached by name. An admin device is never
+      // inherited by signing in with its name; adminship is granted only in the
+      // admin console on the Lumio computer.
+      findByName: db.prepare('SELECT id FROM devices WHERE name = ? COLLATE NOCASE AND is_admin = 0 ORDER BY last_seen DESC LIMIT 1'),
       endAll: db.prepare('DELETE FROM sessions'),
       deleteAllDevices: db.prepare('DELETE FROM devices'),
     };
@@ -102,6 +107,12 @@ class Sessions {
   createDeviceSession(deviceName, userAgent) {
     const t = this.now();
     const token = randomToken(32);
+    // Don't let a new sign-in look like an admin device in device lists.
+    if (this.q.adminNamed.get(deviceName)) {
+      let n = 2;
+      while (this.q.adminNamed.get(`${deviceName} ${n}`) && n < 100) n += 1;
+      deviceName = `${deviceName} ${n}`.slice(0, 48);
+    }
     const existing = this.q.findByName.get(deviceName);
     const deviceId = existing ? existing.id : randomToken(12);
     if (existing) this.q.touch.run(t, deviceId);
@@ -121,7 +132,7 @@ class Sessions {
       return null;
     }
     this.q.touch.run(this.now(), row.device_id);
-    return { deviceId: row.device_id, deviceName: row.name, csrf: row.csrf, tokenHash: hash };
+    return { deviceId: row.device_id, deviceName: row.name, csrf: row.csrf, tokenHash: hash, isAdmin: row.is_admin === 1 };
   }
 
   destroy(tokenHash) { this.q.deleteSession.run(tokenHash); }
@@ -129,6 +140,8 @@ class Sessions {
   listDevices() { return this.q.listDevices.all(); }
   revokeDevice(id) { return this.q.deleteDevice.run(id).changes > 0; }
   renameDevice(id, name) { return this.q.renameDevice.run(name, id).changes > 0; }
+  /** Grants or removes admin rights for a device (admin console only). */
+  setAdmin(id, admin) { return this.q.setAdmin.run(admin ? 1 : 0, id).changes > 0; }
   /** Removes every device with its sessions and watch history. Returns how many. */
   revokeAllDevices() { return Number(this.q.deleteAllDevices.run().changes); }
   /** Signs out every device (history is kept; devices sign in again by name). */

@@ -138,6 +138,15 @@ test('admin console access control and first-run setup', async (t) => {
   assert.equal((await a.call('/api/cert', {})).status, 200);
   assert.equal((await a.call('/api/status')).json.config.ca.fingerprint, caNow);
 
+  // grant / remove admin rights from the console
+  const dev = a.runtime.sessions.createDeviceSession('Owner laptop', 'ua');
+  assert.equal((await a.call('/api/devices/admin', { id: dev.deviceId, admin: true })).status, 200);
+  assert.equal((await a.call('/api/devices')).json.find((d) => d.id === dev.deviceId).isAdmin, true);
+  assert.equal((await a.call('/api/devices/admin', { id: dev.deviceId, admin: false })).status, 200);
+  assert.equal((await a.call('/api/devices')).json.find((d) => d.id === dev.deviceId).isAdmin, false);
+  assert.equal((await a.call('/api/devices/admin', { id: 'nope', admin: true })).status, 400);
+  a.runtime.sessions.revokeDevice(dev.deviceId);
+
   // remove all devices
   a.runtime.sessions.createDeviceSession('Phone', 'ua');
   a.runtime.sessions.createDeviceSession('TV', 'ua');

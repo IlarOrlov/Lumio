@@ -50,6 +50,9 @@ function openDb(dataDir) {
   }
   const db = new DatabaseSync(file);
   db.exec(SCHEMA);
+  // v2: admin devices (granted only from the admin console on the Lumio computer)
+  const cols = db.prepare('PRAGMA table_info(devices)').all().map((c) => c.name);
+  if (!cols.includes('is_admin')) db.exec('ALTER TABLE devices ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0');
   return db;
 }
 

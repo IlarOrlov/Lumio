@@ -60,6 +60,17 @@ Double-click **Lumio**. It starts in the background and opens the **admin consol
 *Devices* in the admin console lists every signed-in device; **Remove all devices** signs them all
 out and deletes their history.
 
+### Who can change settings
+
+- The **admin console** opens only on the Lumio computer itself (loopback-only, unlocked by the
+  desktop icon). No other device can reach it.
+- In Lumio, **Settings** (device list, signing out other devices, rescans, the Windows helper) is
+  available only on **admin devices**. Other devices can watch, and see just their own name and a
+  sign-out button. The server enforces this, so hiding the menu isn't the only protection.
+- Make a device an admin in the admin console → *Devices* → **Make admin**. Knowing the household
+  password isn't enough: signing in with an admin device's name creates a separate, ordinary device
+  (e.g. "Linux PC 2"). If an admin device signs out, make it admin again after it signs back in.
+
 ### Library layout
 
 ```
