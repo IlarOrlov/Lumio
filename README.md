@@ -104,6 +104,12 @@ It writes no backups, logs, temp files or PowerShell caches, and offers to delet
 *Undo* removes the forward and the firewall rule again. `lumio.local` doesn't work through NAT, so
 devices use `https://<Windows-PC-IP>:8443` in this mode.
 
+**Harden the VM (recommended with Bridged):** `sudo bash deploy/harden-vm.sh` turns on a firewall
+that lets home devices reach only Lumio (TCP 8443 and `lumio.local` lookups) while the VM itself
+can't start connections to anything else on your home network (router, NAS, phones, the Windows
+PC). Internet stays available for updates. It also turns off network discovery (avahi,
+cups-browsed) and tightens kernel network settings. Undo with `--undo`.
+
 > Never forward this port on your internet router. Lumio is built for your home network only.
 
 ## For developers
