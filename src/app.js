@@ -8,6 +8,7 @@ const {
 } = require('./http-util');
 const media = require('./media');
 const { caPaths } = require('./tls');
+const { legacyCss } = require('./legacycss');
 
 const ID_RE = /^[0-9a-f]{20}$/;
 const SHOW_RE = /^[0-9a-f]{16}$/;
@@ -28,6 +29,10 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
   const isAllowedIp = createNetworkGuard(cfg.allowedNetworks);
   const isAllowedHost = createHostGuard(cfg.allowedHosts);
   const statics = loadStatic(path.join(__dirname, '..', 'public'));
+  if (statics.has('/style.css')) {
+    const body = Buffer.from(legacyCss(statics.get('/style.css').body.toString('utf8')));
+    statics.set('/style.legacy.css', { body, type: statics.get('/style.css').type });
+  }
   const thumbsDir = path.join(cfg.dataDir, 'thumbs');
   const cookieName = cfg.https ? '__Host-lumio' : 'lumio';
   const active = { transcode: 0, remux: 0 };

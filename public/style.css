@@ -48,7 +48,7 @@ p { margin: 0; }
 
 /* ---------- the room: WebGL beam canvas (CSS fallback without WebGL) ---------- */
 .room {
-  position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; display: block;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; z-index: -1; display: block;
   image-rendering: auto; pointer-events: none;
 }
 .no-gl .room { display: none; }
@@ -139,7 +139,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
 }
 .screen.tilting { transition: transform .12s linear; }
 .screen-img {
-  position: absolute; inset: 0; border-radius: 14px; overflow: hidden;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; border-radius: 14px; overflow: hidden;
   background: var(--dusk-2);
   box-shadow:
     0 0 0 1px rgba(255, 241, 208, .22),
@@ -149,7 +149,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
 }
 .screen-img img { width: 100%; height: 100%; object-fit: cover; filter: saturate(1.1) contrast(1.05); }
 .screen-img::after { /* light from the projector washing over the picture */
-  content: ""; position: absolute; inset: 0;
+  content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
   background: radial-gradient(120% 90% at 0% 0%, rgba(255, 241, 208, .22), transparent 55%),
     radial-gradient(70% 60% at var(--gx, 50%) var(--gy, 40%), rgba(255, 255, 255, .14), transparent 60%);
   mix-blend-mode: screen;
@@ -165,7 +165,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
   to { opacity: 1; transform: rotateX(var(--rx)) rotateY(var(--ry)); }
 }
 .play-orb {
-  position: absolute; inset: 0; margin: auto; width: 84px; height: 84px; border-radius: 50%;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; margin: auto; width: 84px; height: 84px; border-radius: 50%;
   display: grid; place-items: center; color: var(--ink);
   background: radial-gradient(circle at 35% 30%, #fff8e6, var(--lamp) 60%, #e89a3c);
   box-shadow: 0 0 0 10px rgba(255, 196, 107, .16), 0 0 50px rgba(255, 196, 107, .7);
@@ -181,6 +181,18 @@ main { padding-bottom: 72px; perspective: 1400px; }
   .screen-wrap { perspective: 1400px; perspective-origin: 50% 40%; }
   .marquee { font-size: clamp(2.8rem, 13vw, 5rem); }
 }
+
+/* no aspect-ratio support (TVs before ~2021): classic padding box */
+@supports not (aspect-ratio: 1) {
+  .frame, .screen { height: 0; padding-top: 56.25%; }
+  .frame > .thumb { position: absolute; top: 0; left: 0; }
+}
+.boot-error {
+  position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 99; padding: 18px 20px; border-radius: 16px;
+  background: #2a0f18; border: 1px solid #ff6b81; color: #fff; font: 16px/1.4 system-ui, sans-serif;
+}
+.boot-error p { margin: 8px 0 0; }
+.boot-error .ua { font-size: 12px; opacity: .7; word-break: break-all; }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -231,7 +243,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
 .card:focus-visible { outline: none; }
 .card:focus-visible .frame { outline: 2px solid var(--glint); outline-offset: 3px; }
 .frame::after { /* glare that follows the pointer */
-  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .3s;
+  content: ""; position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none; opacity: 0; transition: opacity .3s;
   background: radial-gradient(60% 80% at var(--gx, 50%) var(--gy, 0%), rgba(255, 248, 230, .28), transparent 60%);
   mix-blend-mode: screen;
 }
@@ -367,7 +379,7 @@ body.watching .topbar { display: none; }
 body.watching .room { visibility: hidden; }
 /* fixed-position player must not be trapped by the 3D perspective of <main> */
 body.watching main { perspective: none; transform: none; animation: none; }
-.player { position: fixed; inset: 0; background: #000; z-index: 20; animation: lights-down .5s ease both; }
+.player { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #000; z-index: 20; animation: lights-down .5s ease both; }
 @keyframes lights-down { from { opacity: 0; } }
 .video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .video::cue { background: rgba(0, 0, 0, .55); font-size: clamp(16px, 2.6vw, 34px); }
@@ -456,7 +468,7 @@ body.watching main { perspective: none; transform: none; animation: none; }
   .p-title strong { font-size: 1.35rem; }
 }
 .spinner {
-  position: absolute; inset: 0; margin: auto; width: 62px; height: 62px; border-radius: 50%;
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; margin: auto; width: 62px; height: 62px; border-radius: 50%;
   border: 3px solid rgba(255, 255, 255, .1); border-top-color: var(--lamp); border-right-color: var(--glint);
   animation: spin .9s linear infinite; box-shadow: 0 0 30px -6px rgba(255, 196, 107, .6);
 }

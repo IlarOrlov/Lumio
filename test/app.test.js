@@ -223,3 +223,17 @@ test('settings are admin-only; adminship cannot be taken over by signing in with
   assert.equal((await req(base, '/api/devices/revoke', { method: 'POST', cookie: second.cookie, csrf: second.csrf, body: { id: owner.me.deviceId } })).status, 403);
   assert.equal((await req(base, '/api/devices/revoke', { method: 'POST', cookie: second.cookie, csrf: second.csrf, body: { id: guest.me.deviceId } })).status, 200);
 });
+
+test('old TV browsers: compat script and a variable-free stylesheet are served', async (t) => {
+  const { server, base } = await setup();
+  t.after(() => server.close());
+  const legacy = await req(base, '/style.legacy.css');
+  assert.equal(legacy.status, 200);
+  assert.match(legacy.headers.get('content-type'), /text\/css/);
+  assert.ok(!/var\(--/.test(legacy.text) && !/--[\w-]+\s*:/.test(legacy.text), 'no custom properties left');
+  assert.match(legacy.text, /#ffc46b/, 'theme colours resolved');
+  const compat = await req(base, '/compat.js');
+  assert.equal(compat.status, 200);
+  const index = await req(base, '/');
+  assert.ok(index.text.indexOf('/compat.js') < index.text.indexOf('/app.js'), 'compat loads before the app');
+});

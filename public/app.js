@@ -740,5 +740,8 @@
       if (nav) nav.remove();
     }
     return loadAll();
-  }).then(render).catch(function () {});
+  }).then(render).catch(function (e) {
+    if (e && e.message === 'signed out') return;
+    if (window.LumioShowError) window.LumioShowError('Couldn\'t load your library: ' + ((e && e.message) || e));
+  });
 })();
