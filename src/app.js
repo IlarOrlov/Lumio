@@ -345,12 +345,15 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
   return handler;
 
   async function handler(req, res) {
+    // HTTP/2 carries the host as ":authority"; the rest of Lumio reads req.headers.host.
+    if (req.headers.host === undefined && typeof req.headers[':authority'] === 'string') req.headers.host = req.headers[':authority'];
     securityHeaders(res, cfg);
     if (cfg.logRequests) {
       // Diagnostics (off by default): path only, never the query string or body.
+      const remote = req.socket && req.socket.remoteAddress;
       res.on('finish', () => {
         const path = String(req.url || '').split('?')[0].slice(0, 120);
-        log.info?.(`[req] ${req.method} ${path} ${res.statusCode} ${req.socket.remoteAddress} origin=${req.headers.origin || '-'} ua=${String(req.headers['user-agent'] || '').slice(0, 140)}`);
+        log.info?.(`[req] ${req.method} ${path} ${res.statusCode} ${remote} h${req.httpVersion} origin=${req.headers.origin || '-'} ua=${String(req.headers['user-agent'] || '').slice(0, 140)}`);
       });
     }
     try {

@@ -268,3 +268,48 @@ test('a sign-in attempt with credentials in the URL is never rendered: clean red
   assert.ok(!/name="username"/.test(page.text), 'helper field is never submitted');
   assert.equal((await fetch(base + '/login?e=wrong', { redirect: 'manual' })).status, 200);
 });
+
+test('HTTP/2 over TLS (one connection for everything) and HTTP/1.1 fallback both work', async (t) => {
+  const http2 = require('node:http2');
+  const https = require('node:https');
+  const { generateCert, caPaths } = require('../src/tls');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-h2-'));
+  const certPath = path.join(dir, 'cert.pem'); const keyPath = path.join(dir, 'key.pem');
+  generateCert(certPath, keyPath, ['lumio.local']);
+  const db = openDb(':memory:');
+  const lib = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-lib-'));
+  const catalog = new Catalog(db, [lib], { probe: async () => ({ duration: 1, video: null, audio: [], subtitles: [] }), log: {} });
+  catalog.rescan();
+  const handler = createApp({
+    cfg: { https: true, allowedNetworks: ['127.0.0.0/8', '::1/128'], allowedHosts: ['lumio.local'], sessionDays: 1, maxTranscodes: 1,
+      passwordHash: await hashPassword(PASSWORD), dataDir: dir, tlsCert: certPath },
+    catalog, sessions: new Sessions(db), progress: new Progress(db), limiter: new LoginLimiter(), log: {},
+  });
+  const server = http2.createSecureServer({ cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath), allowHTTP1: true }, handler);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  const port = server.address().port;
+  const ca = fs.readFileSync(caPaths(certPath).cert);
+
+  const client = http2.connect(`https://lumio.local:${port}`, { ca, lookup: (h, o, cb) => cb(null, [{ address: '127.0.0.1', family: 4 }]) });
+  t.after(() => client.close());
+  const get = (p) => new Promise((resolve, reject) => {
+    const s = client.request({ ':path': p });
+    let status; let body = '';
+    s.on('response', (h) => { status = h[':status']; });
+    s.on('data', (c) => { body += c; });
+    s.on('end', () => resolve({ status, body }));
+    s.on('error', reject);
+  });
+  const [page, me, css] = await Promise.all([get('/login'), get('/api/me'), get('/style.css')]);
+  assert.equal(page.status, 200, 'page over h2');
+  assert.match(page.body, /<form/);
+  assert.equal(me.status, 401, 'host check passes via :authority (not 421)');
+  assert.equal(css.status, 200);
+
+  const h1 = await new Promise((resolve) => https.get({ host: '127.0.0.1', port, path: '/login', servername: 'lumio.local', ca, agent: false, headers: { Host: `lumio.local:${port}` } }, (r) => {
+    const alpn = r.socket.alpnProtocol; r.resume(); resolve({ status: r.statusCode, alpn });
+  }));
+  assert.equal(h1.status, 200, 'HTTP/1.1 clients still work');
+  assert.ok(h1.alpn === 'http/1.1' || h1.alpn === false);
+});

@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
-const https = require('node:https');
+const http2 = require('node:http2');
 const net = require('node:net');
 const { loadConfig, readRaw, writeRaw, resolveFromRoot, certHosts, DEFAULTS } = require('./config');
 const { randomToken, safeEqual } = require('./auth');
@@ -156,13 +156,26 @@ class Runtime {
         helper: { download: () => this.windowsHelper({ autoApply: false }), report: (t, ip) => this.hostReport(t, ip) },
       });
       const server = cfg.https
-        ? https.createServer(this.tlsOptions(cfg), this.handler)
+        // HTTP/2 (with HTTP/1.1 fallback): every request shares ONE encrypted
+        // connection. Smart-TV browsers that only trust a clicked-through
+        // certificate on the first connection then load everything, and all
+        // devices load faster.
+        ? http2.createSecureServer({ ...this.tlsOptions(cfg), allowHTTP1: true, settings: { maxConcurrentStreams: 128 } }, this.handler)
         : http.createServer(this.handler);
       server.headersTimeout = 15_000;
       server.requestTimeout = 30_000;
       server.keepAliveTimeout = 10_000;
       server.maxHeadersCount = 50;
       server.maxConnections = 200;
+      const sockets = new Set();
+      server.on('connection', (sock) => { sockets.add(sock); sock.on('close', () => sockets.delete(sock)); });
+      server.destroyAll = () => { for (const sock of sockets) sock.destroy(); };
+      if (cfg.logRequests) {
+        // Diagnostics: connections that fail before any HTTP request is read.
+        server.on('tlsClientError', (e, sock) => log.warn(`[tls] handshake failed from ${sock && sock.remoteAddress}: ${e.code || ''} ${e.message}`));
+        server.on('clientError', (e, sock) => { log.warn(`[http] client error from ${sock && sock.remoteAddress}: ${e.code || ''} ${e.message}`); if (sock.writable) sock.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); });
+        server.on('secureConnection', (sock) => log.info(`[tls] ${sock.remoteAddress} ${sock.getProtocol()} ${(sock.getCipher() || {}).name} resumed=${sock.isSessionReused()}`));
+      }
       await new Promise((resolve, reject) => {
         server.once('error', reject);
         server.listen(cfg.port, cfg.host, () => { server.off('error', reject); resolve(); });
@@ -196,7 +209,7 @@ class Runtime {
     if (this.server) {
       const s = this.server;
       this.server = null;
-      await new Promise((r) => { s.close(r); s.closeAllConnections(); });
+      await new Promise((r) => { s.close(r); if (s.closeAllConnections) s.closeAllConnections(); if (s.destroyAll) s.destroyAll(); });
       log.info('streaming stopped');
     }
     this.startedAt = null;
