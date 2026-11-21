@@ -5,7 +5,27 @@ const crypto = require('node:crypto');
 
 const VIDEO_EXT = new Set(['.mkv', '.mp4', '.m4v', '.webm', '.mov']);
 const SUB_EXT = new Set(['.srt', '.vtt']);
-const POSTER_NAMES = ['poster.jpg', 'poster.png', 'folder.jpg', 'folder.png', 'cover.jpg', 'cover.png'];
+const IMAGE_EXT = ['.webp', '.jpg', '.jpeg', '.png'];
+const POSTER_STEMS = ['poster', 'folder', 'cover'];
+const SEASON_DIR = /^(season|staffel|saison|temporada|сезон)[\s._-]*\d+$|^s\d{1,2}$/i;
+
+/** Poster files in a directory (every format present, e.g. poster.webp + poster.png). */
+function postersIn(dir, names) {
+  for (const stem of POSTER_STEMS) {
+    const found = IMAGE_EXT.map((x) => stem + x).filter((n) => names.has(n)).map((n) => path.join(dir, n));
+    if (found.length) return found;
+  }
+  return [];
+}
+const postersCache = new Map();
+function postersOfDir(dir) {
+  if (!postersCache.has(dir)) {
+    let names = new Set();
+    try { names = new Set(fs.readdirSync(dir).map((n) => n.toLowerCase())); } catch { /* unreadable */ }
+    postersCache.set(dir, postersIn(dir, names));
+  }
+  return postersCache.get(dir);
+}
 
 const JUNK = /\b(2160p|1080p|720p|480p|4k|uhd|hdr10?|dv|bluray|blu-ray|bdrip|brrip|web-?dl|webrip|web|hdtv|dvdrip|remux|x264|x265|h\.?264|h\.?265|hevc|avc|aac\d?(\.\d)?|ac3|dts(-hd)?|ddp?\d(\.\d)?|atmos|10bit|proper|repack|extended|unrated|imax)\b.*$/i;
 
@@ -61,13 +81,14 @@ function scanLibrary(mediaDirs) {
   const items = new Map();
   const roots = mediaDirs.map((d) => fs.realpathSync(d));
   const insideRoot = (p) => roots.some((r) => p === r || p.startsWith(r + path.sep));
+  postersCache.clear();
 
   const walk = (dir, depth) => {
     if (depth > 12) return;
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     const names = new Set(entries.map((e) => e.name.toLowerCase()));
-    const dirPoster = POSTER_NAMES.find((n) => names.has(n));
+    const dirPosters = postersIn(dir, names);
 
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
@@ -94,7 +115,7 @@ function scanLibrary(mediaDirs) {
           const lang = s.name.slice(stem.length, -path.extname(s.name).length).replace(/^[._-]+/, '');
           return { path: path.join(dir, s.name), label: lang || 'External' };
         });
-      const ownPoster = ['.jpg', '.png'].map((x) => stem + x).find((n) => names.has(n.toLowerCase()));
+      const ownPosters = IMAGE_EXT.map((x) => stem + x).filter((n) => names.has(n.toLowerCase())).map((n) => path.join(dir, n));
 
       const meta = parseName(full);
       const id = mediaId(full);
@@ -107,7 +128,12 @@ function scanLibrary(mediaDirs) {
         addedAt: Math.floor(stat.birthtimeMs || stat.mtimeMs),
         ...meta,
         showKey: meta.kind === 'episode' ? showKey(meta.show) : null,
-        poster: ownPoster ? path.join(dir, ownPoster) : (dirPoster ? path.join(dir, dirPoster) : null),
+        // Episodes keep their own frame thumbnail unless the file has its own picture;
+        // a poster in the series folder (or a season folder) becomes the series poster.
+        posters: ownPosters.length ? ownPosters : (meta.kind === 'episode' ? [] : dirPosters),
+        showPosters: meta.kind === 'episode'
+          ? (SEASON_DIR.test(path.basename(dir)) ? [...postersOfDir(path.dirname(dir)), ...dirPosters] : dirPosters)
+          : [],
         sidecarSubs,
       });
     }
@@ -124,12 +150,12 @@ function buildShows(items) {
     if (it.kind !== 'episode') continue;
     let show = shows.get(it.showKey);
     if (!show) {
-      show = { key: it.showKey, name: it.show, episodes: [], poster: null, addedAt: 0 };
+      show = { key: it.showKey, name: it.show, episodes: [], posters: [], addedAt: 0 };
       shows.set(it.showKey, show);
     }
     show.episodes.push(it);
     show.addedAt = Math.max(show.addedAt, it.addedAt);
-    if (!show.poster && it.poster) show.poster = it.poster;
+    if (!show.posters.length && it.showPosters.length) show.posters = it.showPosters;
   }
   for (const show of shows.values()) {
     show.episodes.sort((a, b) => a.season - b.season || a.episode - b.episode || a.path.localeCompare(b.path));

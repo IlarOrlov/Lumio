@@ -47,6 +47,34 @@
     };
   }
 
+  // ---------- performance tier: full (PC) / lite (phones) / basic (TVs, old or weak devices) ----------
+  (function () {
+    var ua = navigator.userAgent;
+    var tv = /SmartTV|SMART-TV|Tizen|Web0S|webOS|NetCast|BRAVIA|HbbTV|AFT[A-Z]|CrKey|Android TV|GoogleTV|Roku|VIDAA|Opera TV|Colt\//i.test(ua);
+    var chrome = /Chrome\/(\d+)/.exec(ua);
+    var oldEngine = (chrome && Number(chrome[1]) < 90) || !(window.CSS && CSS.supports && CSS.supports('aspect-ratio', '1'));
+    var cores = navigator.hardwareConcurrency || 2;
+    var mem = navigator.deviceMemory || 4;
+    var saveData = !!(navigator.connection && navigator.connection.saveData);
+    var reduced = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+    var touch = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
+    var tier = 'full';
+    if (tv || oldEngine || cores <= 2 || mem <= 2 || saveData) tier = 'basic';
+    else if (touch || cores <= 4 || mem <= 4 || reduced) tier = 'lite';
+    var auto = tier;
+    try { var pick = localStorage.getItem('lumio-fx'); if (pick === 'full' || pick === 'lite' || pick === 'basic') tier = pick; } catch (e) { /* storage blocked */ }
+    document.documentElement.className += ' fx-' + tier;
+    window.LumioTier = tier;
+    window.LumioAutoTier = auto;
+    /** Switch tier at runtime (Settings, or automatically when the device can't keep up). */
+    window.LumioSetTier = function (t, remember) {
+      if (remember !== undefined) { try { if (remember) localStorage.setItem('lumio-fx', remember); else localStorage.removeItem('lumio-fx'); } catch (e) { /* storage blocked */ } }
+      var el = document.documentElement;
+      el.className = el.className.replace(/\bfx-(full|lite|basic)\b/g, '').replace(/\s+/g, ' ') + ' fx-' + t;
+      window.LumioTier = t;
+    };
+  })();
+
   // No CSS variables (Chrome < 49, old WebKit)? Use the server's pre-resolved stylesheet.
   var cssVars = window.CSS && CSS.supports && CSS.supports('--a', '0');
   if (!cssVars) {
@@ -54,6 +82,19 @@
     if (link) link.setAttribute('href', '/style.legacy.css');
     document.documentElement.className += ' legacy';
   }
+
+  // Flexbox "gap" (Chrome 84+). Older TV browsers get equivalent margins via .no-flex-gap.
+  function detectFlexGap() {
+    var f = document.createElement('div');
+    f.style.cssText = 'display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden';
+    f.appendChild(document.createElement('div'));
+    f.appendChild(document.createElement('div'));
+    (document.body || document.documentElement).appendChild(f);
+    var ok = f.scrollHeight === 1;
+    f.parentNode.removeChild(f);
+    if (!ok) document.documentElement.className += ' no-flex-gap';
+  }
+  if (document.body) detectFlexGap(); else document.addEventListener('DOMContentLoaded', detectFlexGap);
 
   function showError(msg) {
     var box = document.getElementById('lumio-error');

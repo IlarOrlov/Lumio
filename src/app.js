@@ -185,18 +185,29 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
     child.stdout.pipe(res);
   }
 
+  const IMAGE_TYPES = { '.webp': 'image/webp', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
+  /** Picks the best picture for this browser: WebP when it says it supports it, else JPEG/PNG. */
+  function pickImage(files, req) {
+    const webp = /image\/webp/.test(String(req.headers.accept || ''));
+    const byExt = (x) => files.find((f) => path.extname(f).toLowerCase() === x);
+    return (webp && byExt('.webp')) || byExt('.jpg') || byExt('.jpeg') || byExt('.png') || byExt('.webp') || null;
+  }
+  function sendImage(res, file, cache) {
+    const st = fs.statSync(file);
+    res.writeHead(200, {
+      'Content-Type': IMAGE_TYPES[path.extname(file).toLowerCase()] || 'image/jpeg',
+      'Content-Length': st.size, 'Cache-Control': cache || 'private, max-age=86400', Vary: 'Accept',
+    });
+    fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
+  }
+
   async function thumb(req, res, item) {
-    let file = item.poster;
+    let file = item.posters && item.posters.length ? pickImage(item.posters, req) : null;
     if (!file) {
       const info = catalog.cachedProbe(item) || await catalog.probe(item);
       file = await media.thumbnail(item, info.duration, thumbsDir);
     }
-    const st = fs.statSync(file);
-    res.writeHead(200, {
-      'Content-Type': file.endsWith('.png') ? 'image/png' : 'image/jpeg',
-      'Content-Length': st.size, 'Cache-Control': 'private, max-age=86400',
-    });
-    fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
+    return sendImage(res, file);
   }
 
   // ---------- router ----------
@@ -333,6 +344,12 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
       const show = catalog.shows.get(r[1]);
       if (!show) return sendError(res, 404, 'Not found');
       return sendJson(res, 200, { ...catalog.showSummary(show), episodes: show.episodes.map((e) => catalog.summary(e)) });
+    }
+    if ((m === 'GET' || m === 'HEAD') && (r = /^\/shows\/([0-9a-f]+)\/poster$/.exec(p)) && SHOW_RE.test(r[1])) {
+      const show = catalog.shows.get(r[1]);
+      const file = show && show.posters.length ? pickImage(show.posters, req) : null;
+      if (!file) return sendError(res, 404, 'No poster');
+      return sendImage(res, file, 'private, max-age=3600');
     }
     if ((r = /^\/(api\/)?media\/([0-9a-f]+)\/?(.*)$/.exec(p)) && ID_RE.test(r[2])) {
       const item = catalog.get(r[2]);

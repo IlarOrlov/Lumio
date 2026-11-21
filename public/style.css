@@ -194,6 +194,23 @@ main { padding-bottom: 72px; perspective: 1400px; }
 .boot-error p { margin: 8px 0 0; }
 .boot-error .ua { font-size: 12px; opacity: .7; word-break: break-all; }
 
+/* Browsers without flexbox "gap" (Chrome < 84, e.g. LG/Samsung TVs): equivalent margins.
+   compat.js adds .no-flex-gap only when the browser needs it. */
+.no-flex-gap .topbar > * + * { margin-left: 24px; }
+.no-flex-gap .nav > * + *, .no-flex-gap .tabs > * + * { margin-left: 4px; }
+.no-flex-gap .actions > * + * { margin-left: 12px; }
+.no-flex-gap .btn > * + *, .no-flex-gap .skip-intro > * + * { margin-left: 9px; }
+.no-flex-gap .stage-sub > * + *, .no-flex-gap .watch-sub > * + * { margin-left: 12px; }
+.no-flex-gap .inline > * + *, .no-flex-gap .upnext-btns > * + * { margin-left: 10px; }
+.no-flex-gap .row-head > * + * { margin-left: 16px; }
+.no-flex-gap .seekline > * + * { margin-left: 12px; }
+.no-flex-gap .ctl-side > * + * { margin-left: 8px; }
+.no-flex-gap .ctl-center > * + * { margin-left: 28px; }
+.no-flex-gap .presets > * { margin: 0 6px 6px 0; }
+.no-flex-gap .brand > * + *, .no-flex-gap .ep-title > * + * { margin-left: 10px; }
+.no-flex-gap .who::before { margin-right: 8px; }
+.no-flex-gap .login-card > * + *, .no-flex-gap .stage-copy > * + *, .no-flex-gap .field > * + *, .no-flex-gap .upnext > * + * { margin-top: 14px; }
+
 /* ---------- buttons ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 9px;
@@ -250,6 +267,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
 .card:hover .frame::after, .card.tilting .frame::after { opacity: 1; }
 .thumb { width: 100%; height: 100%; object-fit: cover; transition: transform .6s var(--ease), filter .4s; filter: saturate(.92); }
 .card:hover .thumb { transform: scale(1.06); filter: saturate(1.1); }
+.poster-img { object-position: 50% 12%; } /* keep a poster's title lettering in frame */
 .meta { display: flex; flex-direction: column; gap: 2px; padding: 11px 2px 0; min-width: 0; }
 .meta strong { font-weight: 650; font-size: .98rem; }
 .meta strong, .meta span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -279,6 +297,7 @@ main { padding-bottom: 72px; perspective: 1400px; }
   background: none; border: 0; color: var(--haze); font: 600 .92rem var(--body); padding: 8px 16px; border-radius: 999px; cursor: pointer; white-space: nowrap;
   transition: color .2s, background .3s var(--ease);
 }
+.fx-pick { margin: 6px 0 0; flex-wrap: wrap; border-radius: 18px; }
 .tab.active { color: #1c1204; background: linear-gradient(180deg, #ffe3ad, var(--lamp)); box-shadow: 0 0 20px -4px rgba(255, 196, 107, .8); }
 .episodes, .history { display: grid; gap: 12px; padding: 0 var(--gutter); perspective: 1200px; }
 .episode, .hist {
@@ -373,19 +392,58 @@ input[type=text]:focus, input[type=password]:focus { outline: none; border-color
 .login-foot a { color: var(--beam); text-decoration: underline; text-decoration-color: rgba(255, 241, 208, .35); text-underline-offset: 3px; }
 .login-card .error { font-size: .9rem; text-align: center; }
 
-/* ---------- player ---------- */
-body.watching { overflow: hidden; }
-body.watching .topbar { display: none; }
-body.watching .room { visibility: hidden; }
-/* fixed-position player must not be trapped by the 3D perspective of <main> */
-body.watching main { perspective: none; transform: none; animation: none; }
-.player { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: #000; z-index: 20; animation: lights-down .5s ease both; }
-@keyframes lights-down { from { opacity: 0; } }
+/* ---------- player: theatre layout (video on top, episodes underneath) ---------- */
+.watch { padding: 20px var(--gutter) 48px; }
+.player {
+  position: relative; z-index: 1; width: 100%; max-width: 1280px; margin: 0 auto;
+  height: 56.25vw; height: calc(min(100vw - 2 * var(--gutter), 1280px) * .5625); max-height: 74vh;
+  background: #000; border-radius: 20px; overflow: hidden;
+  box-shadow: 0 0 0 1px rgba(255, 241, 208, .14), 0 40px 90px -30px rgba(0, 0, 0, .95), 0 0 120px -40px rgba(255, 196, 107, .35);
+  animation: lights-down .5s ease both;
+}
+.player:fullscreen { max-width: none; max-height: none; width: 100%; height: 100%; border-radius: 0; box-shadow: none; }
+.player:-webkit-full-screen { max-width: none; max-height: none; width: 100%; height: 100%; border-radius: 0; box-shadow: none; }
+.tap { position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 1; cursor: pointer; }
+.p-title, .controls, .spinner, .skip-intro, .pmenu, .upnext { z-index: 2; }
+.p-title { display: none; }
+.player:fullscreen .p-title { display: flex; }
+.player:-webkit-full-screen .p-title { display: flex; }
+@keyframes lights-down { from { opacity: 0; transform: scale(.985); } }
+@media (max-width: 860px) {
+  .watch { padding: 0 0 36px; }
+  .player { height: 56.25vw; max-height: none; border-radius: 0; box-shadow: none; }
+  .watch-info { padding: 0 var(--gutter); }
+}
+.watch-info { max-width: 1280px; margin: 24px auto 0; }
+.watch-head h1 { font-size: clamp(2.2rem, 4.5vw, 3.6rem); color: var(--beam); text-shadow: 0 0 30px rgba(255, 196, 107, .3); }
+.watch-sub { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-top: 10px; color: var(--text); }
+.watch-eps { margin-top: 28px; }
+.watch-eps .row-head { flex-wrap: wrap; }
+.watch-eps .tabs { margin: 0; }
+.watch-more { margin-top: 28px; }
+.ep-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px; margin-top: 14px; }
+.ep-tile {
+  position: relative; display: flex; flex-direction: column; justify-content: space-between; min-height: 104px; padding: 12px 14px 14px; overflow: hidden;
+  border-radius: 16px; background: var(--glass); border: 1px solid var(--line);
+  transition: transform .25s var(--ease), border-color .25s, background .25s, box-shadow .25s;
+}
+.ep-tile .n { font: 900 2.7rem/1 var(--display); color: var(--haze); letter-spacing: -.01em; transition: color .25s; }
+.ep-tile .t { margin-top: 4px; font-size: .84rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ep-tile .note { margin-top: 6px; font-size: .8rem; color: var(--haze); }
+.ep-tile:hover, .ep-tile:focus-visible { transform: translateY(-3px); border-color: rgba(255, 241, 208, .32); background: rgba(24, 29, 58, .78); outline: none; }
+.ep-tile:focus-visible { box-shadow: 0 0 0 2px var(--glint); }
+.ep-tile:hover .n, .ep-tile:focus-visible .n { color: var(--beam); }
+.ep-tile.done .n { color: rgba(255, 196, 107, .55); }
+.ep-tile.done .note::before { content: "\2713  "; color: var(--lamp); }
+.ep-tile.now { border-color: rgba(255, 196, 107, .7); background: linear-gradient(160deg, rgba(255, 196, 107, .16), rgba(16, 20, 42, .7)); box-shadow: 0 0 40px -12px rgba(255, 196, 107, .7); }
+.ep-tile.now .n { color: var(--lamp); }
+.ep-tile.now .note { color: var(--lamp); font-weight: 700; }
+.ep-tile .bar { height: 3px; }
 .video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .video::cue { background: rgba(0, 0, 0, .55); font-size: clamp(16px, 2.6vw, 34px); }
 .p-title, .controls { position: absolute; left: 0; right: 0; transition: opacity .35s, transform .35s var(--ease); }
 .p-title {
-  top: 0; display: flex; gap: 16px; align-items: center; padding: 20px clamp(16px, 3vw, 40px);
+  top: 0; gap: 16px; align-items: center; padding: 20px clamp(16px, 3vw, 40px);
   background: linear-gradient(rgba(0, 0, 0, .78), transparent);
 }
 .p-title strong { font: 800 1.7rem/1 var(--display); letter-spacing: .02em; }
@@ -489,3 +547,39 @@ body.watching main { perspective: none; transform: none; animation: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ================= performance tiers (set by compat.js on <html>) =================
+   fx-full : everything (WebGL beam, 3D tilt, glass blur, glows, reflections)
+   fx-lite : phones/tablets: lighter beam, no tilt, smaller blurs
+   fx-basic: TVs and old/weak devices: same design, but nothing the GPU struggles with:
+             no WebGL, no backdrop blur, no glows, no 3D, no looping animation. */
+.fx-lite .topbar, .fx-lite .panel, .fx-lite .episode, .fx-lite .hist, .fx-lite .ep-tile, .fx-lite .chip, .fx-lite .ctl, .fx-lite .upnext, .fx-lite .pmenu {
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+}
+.fx-lite .screen-img { -webkit-box-reflect: unset; }
+
+.fx-basic *, .fx-basic *::before, .fx-basic *::after {
+  -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+  text-shadow: none !important; animation: none !important;
+  mix-blend-mode: normal !important; filter: none !important;
+}
+.fx-basic .room { display: none; }
+.fx-basic body { background: radial-gradient(90% 70% at 15% 0%, #1f2244 0%, #0d1028 55%, #070a18 100%) no-repeat, #070a18; background-attachment: scroll; }
+.fx-basic .topbar { background: #0b0e22; }
+.fx-basic .panel, .fx-basic .episode, .fx-basic .hist, .fx-basic .ep-tile, .fx-basic .login-card, .fx-basic .upnext, .fx-basic .pmenu, .fx-basic .stat { background: #141834; }
+.fx-basic .ctl:not(.play) { background: #22264a; }
+.fx-basic .ctl.play { background: var(--lamp); }
+.fx-basic .chip { background: rgba(7, 10, 24, .85); }
+.fx-basic .screen, .fx-basic .frame, .fx-basic .login-card, .fx-basic .card:hover .frame, .fx-basic .card:focus-visible .frame { transform: none !important; }
+.fx-basic .screen-img { -webkit-box-reflect: unset; box-shadow: 0 0 0 1px rgba(255, 241, 208, .25); }
+.fx-basic .frame, .fx-basic .card:hover .frame { box-shadow: 0 0 0 1px var(--line); }
+.fx-basic .card:focus .frame, .fx-basic .card:focus-visible .frame, .fx-basic .card:hover .frame { box-shadow: 0 0 0 3px var(--lamp); }
+.fx-basic .frame::after, .fx-basic .screen-img::after { display: none; }
+.fx-basic .card:hover .thumb { transform: none; }
+.fx-basic .btn.primary, .fx-basic .btn.primary:hover, .fx-basic .ctl.play, .fx-basic .skip-intro, .fx-basic .tab.active, .fx-basic .check, .fx-basic .bar span, .fx-basic .ep-tile.now, .fx-basic .player { box-shadow: none; }
+.fx-basic .player { box-shadow: 0 0 0 1px rgba(255, 241, 208, .14); }
+.fx-basic .marquee, .fx-basic .login-card h1 { text-shadow: none; }
+.fx-basic .lens::before, .fx-basic .lens::after { display: none; }
+.fx-basic .ep-tile, .fx-basic .btn, .fx-basic .episode, .fx-basic .tab, .fx-basic .nav a { transition: none; }
+.fx-basic .view-in { animation: none; }
+.fx-basic main, .fx-basic .scroller, .fx-basic .grid, .fx-basic .episodes, .fx-basic .screen-wrap, .fx-basic .login-page { perspective: none; }

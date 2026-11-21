@@ -100,6 +100,7 @@ class Catalog {
       episodeCount: show.episodes.length,
       seasons: [...new Set(show.episodes.map((e) => e.season))].length,
       thumbId: show.episodes[0].id,
+      poster: show.posters.length > 0,
     };
   }
 }

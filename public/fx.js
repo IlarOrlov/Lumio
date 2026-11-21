@@ -57,6 +57,8 @@
 
   function beam(canvas, opts) {
     opts = opts || {};
+    var tier = window.LumioTier || 'full';
+    if (tier === 'basic') { document.documentElement.classList.add('no-gl'); return null; } // TVs/old devices: painted background only
     var gl = null;
     try { gl = canvas.getContext('webgl', { antialias: false, depth: false, alpha: false, powerPreference: 'low-power' }); } catch (e) { gl = null; }
     if (!gl) { document.documentElement.classList.add('no-gl'); return null; }
@@ -76,13 +78,14 @@
     var U = {};
     ['uRes', 'uTime', 'uAim', 'uPower', 'uSrc'].forEach(function (k) { U[k] = gl.getUniformLocation(prog, k); });
 
-    var scale = opts.scale || 0.5;
+    var scale = opts.scale || (tier === 'lite' ? 0.32 : 0.5);
+    var frameMs = tier === 'lite' ? 50 : 33; // lite: ~20 fps, full: ~30 fps
     var power = opts.power == null ? 1 : opts.power;
     var targetPower = power;
     var aim = { x: 0.72, y: 0.42 }, aimT = { x: 0.72, y: 0.42 };
     var src = opts.src || { x: -0.04, y: 1.06 };
     var pointer = { x: 0, y: 0 };
-    var running = false, raf = 0, last = 0, t0 = performance.now(), slow = 0;
+    var running = false, raf = 0, last = 0, t0 = performance.now(), slow = 0, giveUps = 0;
 
     function resize() {
       var w = Math.max(1, Math.round(innerWidth * scale)), hgt = Math.max(1, Math.round(innerHeight * scale));
@@ -104,12 +107,22 @@
       raf = 0;
       if (!running) return;
       raf = requestAnimationFrame(frame);
-      if (now - last < 33) return; // ~30 fps is plenty for drifting haze
+      if (now - last < frameMs) return; // the haze drifts slowly: no need for 60 fps
       var dt = now - last;
       last = now;
       draw(now);
       // adaptive quality: if frames keep arriving late, render fewer pixels
-      if (dt > 60) { if (++slow > 20 && scale > 0.25) { scale = Math.max(0.25, scale * 0.8); slow = 0; } } else slow = Math.max(0, slow - 1);
+      if (dt > frameMs * 2) {
+        if (++slow > 20) {
+          slow = 0;
+          if (scale > 0.25) scale = Math.max(0.25, scale * 0.8);
+          else if (++giveUps > 2) { // still too slow at the lowest quality: switch this device to the light look
+            stop(); canvas.style.display = 'none';
+            document.documentElement.classList.add('no-gl');
+            if (window.LumioSetTier && window.LumioTier === 'full') window.LumioSetTier('lite');
+          }
+        }
+      } else slow = Math.max(0, slow - 1);
     }
     function start() {
       if (reduced) { draw(performance.now() + 4000); return; }
@@ -155,7 +168,7 @@
   // ---------- 3D tilt + glare (delegated) ----------
   var tiltBound = false;
   function tilt() {
-    if (tiltBound || reduced) return;
+    if (tiltBound || reduced || (window.LumioTier && window.LumioTier !== 'full')) return;
     tiltBound = true;
     var current = null;
     function reset(el) {

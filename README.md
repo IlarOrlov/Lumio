@@ -82,7 +82,16 @@ Videos/Series/The Mentalist/Season 1/The Mentalist S01E01.mp4    (+ ...S01E01.ru
 ```
 
 Episodes are recognised by `S01E02` (or `1x02`). Release tags (`1080p`, `x264`, …) are ignored.
-Optional `poster.jpg` in a folder is used as its cover.
+Series picture: put `poster.webp` (and/or `poster.jpg` / `poster.png`) in the series folder, e.g.
+`Series/The Mentalist/poster.webp`. Lumio sends WebP to browsers that support it and JPEG/PNG to the
+rest. Episodes keep their own frame thumbnails. For a movie, `poster.jpg` next to it is its cover.
+
+### Looks great on a PC, runs fast on a TV
+
+Lumio grades every device as it loads: **Full** (computers: animated light beam, 3D tilt, glass
+blur, glows), **Light** (phones/tablets) or **Basic** (smart TVs, old browsers, low-power devices:
+the same design without GPU-heavy effects). Features a browser lacks (old TV engines) are filled in
+automatically. Each device can override this under *Settings → Visual effects*.
 
 ## Running inside a VMware VM
 

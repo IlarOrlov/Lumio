@@ -164,6 +164,12 @@
     return h('img', { class: cls || 'thumb', src: '/media/' + id + '/thumb', alt: '', loading: 'lazy', decoding: 'async' });
   }
 
+  /** The series' own poster when it has one, otherwise a frame from its first episode. */
+  function showImage(s, cls) {
+    if (!s.poster) return thumb(s.thumbId, cls);
+    return h('img', { class: (cls || 'thumb') + ' poster-img', src: '/shows/' + s.key + '/poster', alt: '', loading: 'lazy', decoding: 'async' });
+  }
+
   function progressBar(p) {
     if (!p || !p.duration) return null;
     var pct = p.completed ? 100 : Math.min(100, (p.position / p.duration) * 100);
@@ -206,7 +212,7 @@
   }
   function showCard(s) {
     return h('a', { class: 'card tilt', href: '#/show/' + s.key, 'data-tilt': '12' },
-      frame(s.thumbId),
+      h('div', { class: 'frame' }, showImage(s)),
       h('div', { class: 'meta' }, h('strong', { text: s.name }), h('span', { text: seasonsText(s.seasons, s.episodeCount) })));
   }
   function row(title, cards, opts) {
@@ -227,7 +233,7 @@
   /** The hero: a big 3D screen the projector beam lands on. */
   function heroStage(o) {
     var screen = h('a', { class: 'screen tilt', href: o.href, 'data-tilt': '8', 'aria-label': o.cta + ': ' + o.title },
-      h('div', { class: 'screen-img' }, thumb(o.thumbId, 'hero-img'), o.progress ? progressBar(o.progress) : null),
+      h('div', { class: 'screen-img' }, o.image || thumb(o.thumbId, 'hero-img'), o.progress ? progressBar(o.progress) : null),
       h('span', { class: 'play-orb', 'aria-hidden': 'true' }, icon('play')));
     var node = h('section', { class: 'stage' },
       h('div', { class: 'stage-copy' },
@@ -270,10 +276,10 @@
         secondary: it.kind === 'episode' ? h('a', { class: 'btn', href: '#/show/' + it.showKey }, 'All episodes') : null,
       });
     } else {
-      var pick = lib.shows[0] ? { title: lib.shows[0].name, thumbId: lib.shows[0].thumbId, href: '#/show/' + lib.shows[0].key, sub: seasonsText(lib.shows[0].seasons, lib.shows[0].episodeCount) }
+      var pick = lib.shows[0] ? { title: lib.shows[0].name, thumbId: lib.shows[0].thumbId, image: showImage(lib.shows[0], 'hero-img'), href: '#/show/' + lib.shows[0].key, sub: seasonsText(lib.shows[0].seasons, lib.shows[0].episodeCount) }
         : { title: lib.movies[0].title, thumbId: lib.movies[0].id, href: '#/watch/' + lib.movies[0].id, sub: itemSub(lib.movies[0]) };
       hero = heroStage({
-        note: 'Welcome, ' + state.me.deviceName, title: pick.title, thumbId: pick.thumbId, href: pick.href, cta: 'Start watching',
+        note: 'Welcome, ' + state.me.deviceName, title: pick.title, thumbId: pick.thumbId, image: pick.image, href: pick.href, cta: 'Start watching',
         sub: h('p', { class: 'stage-sub' }, h('span', { text: pick.sub + '. Whatever you start here resumes on this device.' })),
       });
     }
@@ -334,7 +340,7 @@
       renderSeason(current);
       var hero = heroStage({
         note: seasonsText(show.seasons, show.episodeCount),
-        title: show.name, thumbId: resume.id, href: '#/watch/' + resume.id,
+        title: show.name, thumbId: resume.id, image: show.poster ? showImage(show, 'hero-img') : null, href: '#/watch/' + resume.id,
         cta: (rp && !rp.completed ? 'Continue ' : 'Play ') + epCode(resume),
         progress: rp && !rp.completed ? rp : null,
         sub: h('p', { class: 'stage-sub' }, h('span', { class: 'code', text: epCode(resume) }), h('strong', { text: resume.title })),
@@ -370,12 +376,32 @@
     });
   }
 
+
+  /** Per-device look: Auto (detected), Full, Light or Basic. Stored on this device only. */
+  function effectsPanel() {
+    var cur = 'auto';
+    try { cur = localStorage.getItem('lumio-fx') || 'auto'; } catch (e) { /* storage blocked */ }
+    var auto = window.LumioAutoTier || 'full';
+    var names = { full: 'Full (all effects)', lite: 'Light', basic: 'Basic (fastest)' };
+    var opts = [['auto', 'Auto: ' + names[auto]], ['full', names.full], ['lite', names.lite], ['basic', names.basic]];
+    var row = h('div', { class: 'tabs fx-pick', role: 'radiogroup', 'aria-label': 'Visual effects' });
+    opts.forEach(function (o) {
+      row.appendChild(h('button', { class: 'tab' + (o[0] === cur ? ' active' : ''), role: 'radio', 'aria-checked': o[0] === cur ? 'true' : 'false', onclick: function () {
+        if (window.LumioSetTier) window.LumioSetTier(o[0] === 'auto' ? auto : o[0], o[0] === 'auto' ? null : o[0]);
+        location.reload();
+      } }, o[1]));
+    });
+    return h('section', { class: 'panel' }, h('h2', { text: 'Visual effects on this device' }),
+      h('p', { class: 'muted small', text: 'Lumio picks the look that runs smoothly here. Full shows every effect, Basic is fastest on TVs and older devices.' }), row);
+  }
+
   /** Non-admin devices: their name and sign-out, nothing that changes Lumio. */
   function deviceView() {
     return [
       pageHead(state.me.deviceName, 'This device keeps its own watch history and resume points.'),
       h('section', { class: 'panel' }, h('h2', { text: 'Settings' }),
         h('p', { class: 'muted', text: 'Settings are managed on admin devices. The owner can make a device an admin in the Lumio admin console on the computer that runs Lumio.' })),
+      effectsPanel(),
       h('section', { class: 'panel' }, h('h2', { text: 'Sign out' }),
         h('p', { class: 'muted', text: 'Signing out ends this device\'s session. Sign in again with the same name to get its history back.' }),
         h('button', { class: 'btn danger', onclick: function () {
@@ -411,6 +437,7 @@
           } }, nameInput, h('button', { class: 'btn', type: 'submit' }, 'Rename'), msg),
           h('p', { class: 'muted small', text: 'Plays directly on this device: H.264' + (caps ? ', ' + caps.toUpperCase().split(',').join(', ') : '') + '. Everything else is converted on the fly.' })),
         h('section', { class: 'panel' }, h('h2', { text: 'Signed-in devices' }), devices),
+        effectsPanel(),
         h('section', { class: 'panel' }, h('h2', { text: 'Open Lumio on other devices' }),
           h('p', { class: 'muted', text: 'On any phone, tablet, TV or laptop on your home network, open:' }),
           h('p', null, h('span', { class: 'code', text: 'https://' + (/\.local$/.test(host) ? host : 'lumio.local') + ':' + (location.port || '443') })),
@@ -436,13 +463,58 @@
 
   var player = null;
 
+  /** Theatre layout: the player on top, then the title and the season's episodes as numbered tiles. */
   function watchView(id) {
     return api('/api/media/' + id + '?caps=' + caps).then(function (d) {
       var p = progressOf(id);
       var resumeAt = p && !p.completed && p.position > 10 ? p.position : 0;
-      player = createPlayer(d, resumeAt);
-      return [player.el];
+      var showReq = d.kind === 'episode' ? api('/api/shows/' + d.showKey).catch(function () { return null; }) : Promise.resolve(null);
+      return showReq.then(function (show) {
+        player = createPlayer(d, resumeAt);
+        var head = h('div', { class: 'watch-head' },
+          h('h1', { text: itemTitle(d) }),
+          h('p', { class: 'watch-sub' },
+            d.kind === 'episode' ? h('span', { class: 'code', text: epCode(d) }) : null,
+            h('span', { text: d.kind === 'episode' ? (/^Episode \d+$/.test(d.title) ? '' : d.title) : itemSub(d) }),
+            d.duration ? h('span', { class: 'muted', text: Math.round(d.duration / 60) + ' min' }) : null));
+        var below = [head];
+        if (show) below.push(episodeTiles(show, d));
+        else {
+          var others = state.library.movies.filter(function (m) { return m.id !== d.id; }).map(movieCard);
+          if (others.length) below.push(h('section', { class: 'watch-more' }, h('h2', { text: 'More movies' }), h('div', { class: 'scroller' }, others)));
+        }
+        return [h('div', { class: 'watch' }, player.el, h('section', { class: 'watch-info' }, below))];
+      });
     });
+  }
+
+  function episodeTiles(show, current) {
+    var seasons = [];
+    show.episodes.forEach(function (e) { if (seasons.indexOf(e.season) < 0) seasons.push(e.season); });
+    var grid = h('div', { class: 'ep-grid' });
+    var tabs = h('div', { class: 'tabs', role: 'tablist' });
+    function renderSeason(sn) {
+      Array.prototype.forEach.call(tabs.children, function (t) { t.classList.toggle('active', Number(t.getAttribute('data-season')) === sn); });
+      grid.textContent = '';
+      show.episodes.filter(function (e) { return e.season === sn; }).forEach(function (e) {
+        var pr = progressOf(e.id);
+        var now = e.id === current.id;
+        var note = now ? 'Playing' : pr && pr.completed ? 'Watched' : pr ? fmtLeft(pr.position, pr.duration) : (e.duration ? Math.round(e.duration / 60) + ' min' : '');
+        var named = !/^Episode \d+$/.test(e.title);
+        var tile = h('a', { class: 'ep-tile' + (now ? ' now' : '') + (pr && pr.completed ? ' done' : ''), href: '#/watch/' + e.id, 'aria-current': now ? 'true' : null,
+          'aria-label': 'Episode ' + e.episode + (named ? ', ' + e.title : '') + (note ? ', ' + note : '') },
+          h('span', { class: 'n', text: String(e.episode) }),
+          named ? h('span', { class: 't', text: e.title }) : null,
+          h('span', { class: 'note', text: note }),
+          pr && !pr.completed && !now ? progressBar(pr) : null);
+        grid.appendChild(tile);
+      });
+    }
+    seasons.forEach(function (sn) {
+      tabs.appendChild(h('button', { class: 'tab', role: 'tab', 'data-season': sn, onclick: function () { renderSeason(sn); } }, 'Season ' + sn));
+    });
+    renderSeason(current.season);
+    return h('section', { class: 'watch-eps' }, h('div', { class: 'row-head' }, h('h2', { text: 'Episodes' }), seasons.length > 1 ? tabs : null), grid);
   }
 
   function createPlayer(d, resumeAt) {
@@ -499,7 +571,8 @@
         h('div', { class: 'ctl-center' }, back30, playBtn, fwd30),
         h('div', { class: 'ctl-side right' }, nextBtn, h('button', { class: 'ctl', 'aria-label': 'Fullscreen', title: 'Fullscreen', onclick: toggleFs }, icon('full')))));
 
-    var el = h('div', { class: 'player' }, video, spinner, title, controls, skipBtn, menu, upNext);
+    var tap = h('div', { class: 'tap', 'aria-hidden': 'true' });
+    var el = h('div', { class: 'player' }, video, tap, spinner, title, controls, skipBtn, menu, upNext);
     el.addEventListener('click', function (e) { if (!menu.hidden && !menu.contains(e.target) && !e.target.closest('.ctl')) menu.hidden = true; });
 
     function now() { return offset + (video.currentTime || 0); }
@@ -577,9 +650,10 @@
     }
 
     function toggleFs() {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else if (el.requestFullscreen) el.requestFullscreen().catch(function () {});
-      else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+      var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fsEl) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+      var req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (req) { var r = req.call(el); if (r && r.catch) r.catch(function () {}); } else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
     }
 
     function poke() {
@@ -628,8 +702,13 @@
       durEl.textContent = '';
       timeEl.textContent = 'Playback error. This device may not support the file. Try again or pick another title.';
     });
-    video.addEventListener('click', function () { if (video.paused) video.play(); else video.pause(); });
-    video.addEventListener('dblclick', toggleFs);
+    // One click on the picture plays/pauses (and shows the controls); double-click toggles full screen.
+    tap.addEventListener('click', function () {
+      if (!menu.hidden) { menu.hidden = true; return; }
+      if (video.paused) video.play(); else video.pause();
+      poke();
+    });
+    tap.addEventListener('dblclick', toggleFs);
     playBtn.addEventListener('click', function () { if (video.paused) video.play(); else video.pause(); });
     seek.addEventListener('change', function () { seekTo(Number(seek.value)); });
     el.addEventListener('mousemove', poke);
@@ -646,7 +725,6 @@
       else if (k === 'f') toggleFs();
       else if (k === 's' && currentIntro) skipBtn.click();
       else if (k === 'Escape' && !menu.hidden) { menu.hidden = true; e.preventDefault(); return; }
-      else if (k === 'Escape' && !document.fullscreenElement) history.back();
       poke();
     }
     document.addEventListener('keydown', onKey);
@@ -663,6 +741,7 @@
     }
     timeEl.textContent = fmtTime(resumeAt);
     document.body.classList.add('watching');
+    window.scrollTo(0, 0);
     if (stage) stage.pause(); // the room goes dark while a film plays
 
     return {
