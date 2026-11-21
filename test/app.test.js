@@ -72,7 +72,7 @@ test('security headers are present on every response', async (t) => {
   assert.equal(r.headers.get('cross-origin-embedder-policy'), 'require-corp');
   assert.match(r.headers.get('permissions-policy'), /camera=\(\).*fullscreen=\(self\)/);
   assert.equal(r.headers.get('x-content-type-options'), 'nosniff');
-  assert.equal(r.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(r.headers.get('referrer-policy'), 'same-origin');
 });
 
 test('API requires a session', async (t) => {

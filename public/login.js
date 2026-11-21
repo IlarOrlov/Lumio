@@ -73,7 +73,15 @@
         location.replace('/');
       });
     }).catch(function (e2) {
-      err.textContent = e2.message === 'Failed to fetch' ? 'Lumio isn\'t reachable. Check that this device is on your home network.' : e2.message;
+      if (e2 instanceof TypeError) {
+        // The request never reached Lumio. Some TV browsers trust a clicked-through
+        // certificate only for page navigations, so sign in with a normal (encrypted)
+        // form post instead. The password goes in the request body, never the URL.
+        btn.textContent = 'Signing in';
+        form.submit();
+        return;
+      }
+      err.textContent = e2.message;
       btn.disabled = false;
       btn.textContent = 'Sign in';
       pw.select();

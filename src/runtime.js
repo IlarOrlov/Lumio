@@ -170,6 +170,17 @@ class Runtime {
       const sockets = new Set();
       server.on('connection', (sock) => { sockets.add(sock); sock.on('close', () => sockets.delete(sock)); });
       server.destroyAll = () => { for (const sock of sockets) sock.destroy(); };
+      // Keep HTTP/2 connections alive (tiny PING every 25 s): TVs that can't open a
+      // second connection to a clicked-through certificate keep the first one.
+      server.on('session', (session) => {
+        const started = Date.now();
+        const timer = setInterval(() => { if (!session.closed && !session.destroyed) session.ping(() => {}); }, 25_000);
+        timer.unref();
+        session.on('close', () => {
+          clearInterval(timer);
+          if (cfg.logRequests) log.info(`[h2] session from ${session.socket && session.socket.remoteAddress} closed after ${Math.round((Date.now() - started) / 1000)} s`);
+        });
+      });
       if (cfg.logRequests) {
         // Diagnostics: connections that fail before any HTTP request is read.
         server.on('tlsClientError', (e, sock) => log.warn(`[tls] handshake failed from ${sock && sock.remoteAddress}: ${e.code || ''} ${e.message}`));

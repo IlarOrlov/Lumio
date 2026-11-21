@@ -46,6 +46,8 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
 
   function originOk(req) {
     const origin = req.headers.origin;
+    // "null" origin (privacy-sensitive contexts): accept only if the browser confirms same-site.
+    if (origin === 'null') return req.headers['sec-fetch-site'] === 'same-origin';
     if (origin === undefined) {
       const site = req.headers['sec-fetch-site'];
       return site === undefined || site === 'same-origin' || site === 'none';

@@ -25,7 +25,9 @@ function securityHeaders(res, { https }) {
   res.setHeader('Content-Security-Policy', CSP);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Referrer-Policy', 'no-referrer');
+  // same-origin: nothing ever leaks to other sites, but Lumio's own form posts carry a
+  // real Origin (with no-referrer, browsers send "Origin: null" on form navigations).
+  res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');

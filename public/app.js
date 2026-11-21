@@ -96,7 +96,18 @@
       opts.headers['X-Lumio-CSRF'] = state.me ? state.me.csrf : '';
       opts.body = JSON.stringify(body);
     }
-    return fetch(path, opts).then(function (r) {
+    return fetch(path, opts).catch(function (e) {
+      // Connection refused before reaching Lumio (some TV browsers only trust a
+      // clicked-through certificate on page loads): reload once to reconnect.
+      var last = 0;
+      try { last = Number(sessionStorage.getItem('lumio-reconnect')) || 0; } catch (x) { /* storage blocked */ }
+      if (Date.now() - last > 20000) {
+        try { sessionStorage.setItem('lumio-reconnect', String(Date.now())); } catch (x) { /* storage blocked */ }
+        location.reload();
+        throw new Error('signed out'); // silent: the page is reloading
+      }
+      throw new Error('Lumio isn\'t reachable right now. Check the network and reload the page.');
+    }).then(function (r) {
       if (r.status === 401) { location.replace('/login'); throw new Error('signed out'); }
       return r.json().then(function (data) {
         if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
