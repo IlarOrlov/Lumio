@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-11-22T17:31:18+02:00",
+  "phase": null,
+  "phase_name": null,
+  "phase_dir": null,
+  "plan": null,
+  "task": 4,
+  "total_tasks": 4,
+  "status": "paused",
+  "context": "default (no GSD phase; maintenance work after project completion)",
+  "completed_tasks": [
+    {"id": 1, "name": "Recover Season 1 Full HD AV1 re-encode after OOM kill (released orphaned E17 claim, kept 3 workers)", "status": "done", "commit": null},
+    {"id": 2, "name": "All 23 S1 episodes encoded, verified, swapped into library; downloads deleted; Lumio rescanned (70 episodes, 3 seasons, 16.4 GB)", "status": "done", "commit": null},
+    {"id": 3, "name": "Cleanup: ~/lumio-encode removed, old handoff notes removed from repo", "status": "done", "commit": "71c8180"},
+    {"id": 4, "name": "Startup/process audit; tests now delete their /tmp/lumio-* folders", "status": "done", "commit": "d500abe"}
+  ],
+  "remaining_tasks": [],
+  "blockers": [],
+  "async_jobs": [],
+  "human_actions_pending": [],
+  "decisions": [
+    {"decision": "Max 3 parallel SVT-AV1 1080p encodes on this VM", "rationale": "Each uses ~3.8 GB RSS regardless of cores; 15 GB RAM; a 4th caused OOM kills"},
+    {"decision": "Only Season 1 is Full HD AV1; Seasons 2-3 stay as slim-audio SD files", "rationale": "User: Full HD exists only for Season 1"},
+    {"decision": "Keep lumio.service enabled + linger; keep desktop launcher; keep .lumio-rename-log.tsv", "rationale": "Needed for autostart/admin access; rename log allows undoing file renames"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Nothing pending. Wait for a new user request.",
+  "context_notes": "Project complete and pushed (HEAD d500abe before this handoff commit). 36/36 tests pass. lumio systemd --user service active. Standing rules: no Co-Authored-By/AI attribution in commits; public repo, never commit config/lumio.json, config/tls/, data/."
+}
