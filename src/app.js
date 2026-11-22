@@ -129,6 +129,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
       subtitles,
       next: nxt ? catalog.summary(nxt) : null,
       intros: item.kind === 'episode' && intros ? ((intros.get(item.id) || {}).segments || []) : [],
+      credits: intros ? intros.creditsAt(item.id) : null, // closing credits start: counts as watched, shows "Up next"
     };
   }
 
@@ -387,7 +388,9 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
       const remote = req.socket && req.socket.remoteAddress;
       res.on('finish', () => {
         const path = String(req.url || '').split('?')[0].slice(0, 120);
-        log.info?.(`[req] ${req.method} ${path} ${res.statusCode} ${remote} h${req.httpVersion} origin=${req.headers.origin || '-'} ua=${String(req.headers['user-agent'] || '').slice(0, 140)}`);
+        // The device's codec list is the only query value worth logging: it decides direct play vs conversion.
+        const caps = /[?&]caps=([a-z0-9,]{0,40})/.exec(String(req.url || ''));
+        log.info?.(`[req] ${req.method} ${path}${caps ? ` caps=${caps[1] || 'h264-only'}` : ''} ${res.statusCode} ${remote} h${req.httpVersion} origin=${req.headers.origin || '-'} ua=${String(req.headers['user-agent'] || '').slice(0, 140)}`);
       });
     }
     try {

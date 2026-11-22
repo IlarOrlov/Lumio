@@ -112,11 +112,30 @@ test('library scan: groups shows, finds sidecar subs, refuses escaping symlinks'
   assert.equal(nextEpisode(shows, show.episodes[1]), null);
 });
 
-test('completion threshold', () => {
-  assert.ok(isCompleted(93, 100));
+test('completion: watched once the closing credits are reached', () => {
+  // Detected credits at 2671 s of a 2700 s episode.
+  assert.ok(isCompleted(2670.5, 2700, 2671), 'at the credits');
+  assert.ok(isCompleted(2700, 2700, 2671), 'at the very end');
+  assert.ok(!isCompleted(2600, 2700, 2671), 'a minute before the credits is not watched');
+  assert.ok(!isCompleted(2484, 2700, 2671), 'the old 92% rule no longer counts');
+  assert.ok(!isCompleted(1000, 2700, 900), 'implausible credits (30 min long) are ignored');
+  // Without detected credits: the last 3% (at least 40 s).
   assert.ok(isCompleted(2700 - 80, 2700));
-  assert.ok(!isCompleted(50, 100));
+  assert.ok(!isCompleted(2700 - 120, 2700));
+  assert.ok(isCompleted(95, 100));
   assert.ok(!isCompleted(10, 0));
+});
+
+test('progress: watched sticks when a finished episode is opened again', () => {
+  const db = openDb(':memory:');
+  const dev = new Sessions(db).createDeviceSession('TV', '').deviceId;
+  const p = new Progress(db, { creditsOf: (id) => (id === 'e1' ? 2671 : null) });
+  assert.equal(p.save(dev, 'e1', 2600, 2700).completed, false);
+  assert.equal(p.save(dev, 'e1', 2672, 2700).completed, true, 'credits reached');
+  assert.equal(p.save(dev, 'e1', 5, 2700).completed, true, 'reopening does not un-watch');
+  assert.equal(p.rows(dev)[0].completed, true);
+  p.clear(dev, 'e1');
+  assert.equal(p.rows(dev).length, 0, 'History can still clear it');
 });
 
 test('progress: continue watching is per device, and offers the next episode', () => {
@@ -148,6 +167,40 @@ test('progress: continue watching is per device, and offers the next episode', (
 
   p.save(a, film.id, 5900, 6000);
   assert.equal(p.continueWatching(a, catalog).some((c) => c.id === film.id), false, 'finished film leaves the row');
+});
+
+test('progress: a series continues from the furthest episode reached, not the first unfinished one', () => {
+  const ep = (n) => ({ id: 'e' + n, kind: 'episode', showKey: 's', season: 1, episode: n });
+  const eps = [1, 2, 3, 4, 5, 6, 7, 8].map(ep);
+  const items = new Map(eps.map((e) => [e.id, e]));
+  const catalog = { get: (id) => items.get(id), next: (it) => eps[eps.indexOf(it) + 1] || null };
+  let t = 1000;
+  const db = openDb(':memory:');
+  const dev = new Sessions(db).createDeviceSession('TV', '').deviceId;
+  const p = new Progress(db, { now: () => t++ });
+
+  // Episodes 2-7 opened for a few seconds each, then episode 1 (the old "Continue E01" trap).
+  for (const n of [2, 3, 4, 5, 6, 7]) p.save(dev, 'e' + n, 3, 2600);
+  p.save(dev, 'e1', 4, 2600);
+  let [c] = p.continueWatching(dev, catalog);
+  assert.equal(c.id, 'e7', 'continues on the furthest episode opened');
+  assert.equal(c.position, 0, 'a few seconds in counts as the start');
+
+  p.save(dev, 'e7', 1200, 2600);
+  [c] = p.continueWatching(dev, catalog);
+  assert.deepEqual([c.id, c.position, c.upNext], ['e7', 1200, false]);
+
+  p.save(dev, 'e7', 2590, 2600); // finished 7 -> up next 8
+  [c] = p.continueWatching(dev, catalog);
+  assert.deepEqual([c.id, c.upNext], ['e8', true]);
+
+  p.save(dev, 'e2', 900, 2600); // properly rewatching an old episode resumes it
+  [c] = p.continueWatching(dev, catalog);
+  assert.deepEqual([c.id, c.position], ['e2', 900]);
+
+  p.save(dev, 'e2', 2590, 2600);
+  p.save(dev, 'e8', 2590, 2600); // last episode done: the series leaves the row
+  assert.equal(p.continueWatching(dev, catalog).length, 0);
 });
 
 test('playback plan picks direct / remux / transcode, honouring device codecs', () => {
@@ -296,4 +349,17 @@ test('intros: finds a shared segment at different offsets; needs support from 2+
   assert.deepEqual(det.get(eps[3].id), { segments: [{ start: 1, end: 2 }], source: 'manual', updatedAt: det.get(eps[3].id).updatedAt }, 'manual kept');
   assert.equal(det.applyToSeason(eps[0]), 4);
   assert.equal(det.get(eps[2].id).source, 'manual');
+});
+
+test('credits: the recurring segment running to the end of the tail, extended over adjoining ones', () => {
+  const { creditsFrom } = require('../src/intros');
+  const TAIL = 300;
+  // Matched against 3 other episodes: credits 272-297 s plus a logo just before it at 266-270 s,
+  // and a recurring scene mid-tail (100-120 s) that is not the credits.
+  const matches = [1, 2, 3].flatMap((o) => [
+    { start: 272, end: 297, other: o }, { start: 266, end: 270, other: o }, { start: 100, end: 120, other: o },
+  ]);
+  assert.equal(creditsFrom(matches, TAIL), 266);
+  assert.equal(creditsFrom([{ start: 100, end: 120, other: 1 }, { start: 100, end: 120, other: 2 }], TAIL), null, 'nothing near the end');
+  assert.equal(creditsFrom([{ start: 272, end: 297, other: 1 }], TAIL), null, 'one other episode is not enough');
 });

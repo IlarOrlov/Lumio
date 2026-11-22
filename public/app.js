@@ -309,8 +309,11 @@
     return api('/api/shows/' + key).then(function (show) {
       var seasons = [];
       show.episodes.forEach(function (e) { if (seasons.indexOf(e.season) < 0) seasons.push(e.season); });
-      var resume = show.episodes.find(function (e) { var p = progressOf(e.id); return !p || !p.completed; }) || show.episodes[0];
-      var rp = progressOf(resume.id);
+      // The server decides where a series continues (furthest episode reached,
+      // see resumeEpisode in src/progress.js); the home page uses the same entry.
+      var entry = state.progress.cont.filter(function (c) { return c.item && c.item.showKey === key; })[0];
+      var resume = (entry && show.episodes.filter(function (e) { return e.id === entry.id; })[0]) || show.episodes[0];
+      var rp = entry && !entry.upNext ? { position: entry.position, duration: entry.duration || resume.duration, completed: false } : null;
       var current = resume.season;
       var list = h('div', { class: 'grid ep-cards' });
       var tabs = h('div', { class: 'tabs', role: 'tablist' });
@@ -468,7 +471,9 @@
   function watchView(id) {
     return api('/api/media/' + id + '?caps=' + caps).then(function (d) {
       var p = progressOf(id);
-      var resumeAt = p && !p.completed && p.position > 10 ? p.position : 0;
+      // Resume unless the last stop was already in the credits (then start over).
+      var endAt = d.credits || (d.duration ? d.duration - Math.max(40, d.duration * 0.03) : 0);
+      var resumeAt = p && p.position > 10 && (!endAt || p.position < endAt - 1) ? p.position : 0;
       var showReq = d.kind === 'episode' ? api('/api/shows/' + d.showKey).catch(function () { return null; }) : Promise.resolve(null);
       return showReq.then(function (show) {
         player = createPlayer(d, resumeAt);
@@ -635,19 +640,55 @@
         function () { return subKey; }, function (v) { subKey = v; subBtn.classList.toggle('on', !!v); loadSubs(); });
     });
 
-    function save(force) {
+    // Progress goes out as a plain XMLHttpRequest: it rides the page's own
+    // connection on every engine (the LG TV's browser never delivered the
+    // earlier keepalive fetch). keepalive fetch is used only while the page is
+    // being hidden or closed, where an XHR may be cut off, with XHR as fallback.
+    var saveFails = 0;
+    function postProgress(body, onOk, closing) {
+      var json = JSON.stringify(body);
+      function fail(why) {
+        saveFails += 1;
+        if ((saveFails === 1 || saveFails === 20) && window.LumioReport) window.LumioReport('progress save failed (' + saveFails + '): ' + why);
+      }
+      function viaXhr() {
+        try {
+          var x = new XMLHttpRequest();
+          x.open('POST', '/api/progress', true);
+          x.setRequestHeader('Content-Type', 'application/json');
+          x.setRequestHeader('X-Lumio-CSRF', state.me.csrf);
+          x.onload = function () {
+            if (x.status < 200 || x.status >= 300) return fail('HTTP ' + x.status);
+            var res = null;
+            try { res = JSON.parse(x.responseText); } catch (e) { /* keep null */ }
+            onOk(res);
+          };
+          x.onerror = function () { fail('network error'); };
+          x.send(json);
+        } catch (e) { fail(e && e.message); }
+      }
+      if (closing && window.fetch) {
+        try {
+          fetch('/api/progress', {
+            method: 'POST', credentials: 'same-origin', keepalive: true,
+            headers: { 'Content-Type': 'application/json', 'X-Lumio-CSRF': state.me.csrf },
+            body: json,
+          }).then(function (r) { if (!r.ok) return fail('HTTP ' + r.status); return r.json().then(onOk, function () { onOk(null); }); }, viaXhr);
+          return;
+        } catch (e) { /* keepalive unsupported: fall through */ }
+      }
+      viaXhr();
+    }
+
+    function save(force, closing) {
       var pos = now();
       if (!duration || (!force && Math.abs(pos - lastSaved) < 5)) return;
       lastSaved = pos;
-      fetch('/api/progress', {
-        method: 'POST', credentials: 'same-origin', keepalive: true,
-        headers: { 'Content-Type': 'application/json', 'X-Lumio-CSRF': state.me.csrf },
-        body: JSON.stringify({ id: d.id, position: pos, duration: duration }),
-      }).then(function () {
+      postProgress({ id: d.id, position: pos, duration: duration }, function (res) {
         var m = state.progress.map[d.id] || {};
-        m.id = d.id; m.position = pos; m.duration = duration; m.completed = m.completed || pos / duration >= 0.92;
+        m.id = d.id; m.position = pos; m.duration = duration; m.completed = m.completed || !!(res && res.completed);
         state.progress.map[d.id] = m;
-      }).catch(function () {});
+      }, closing);
     }
 
     function toggleFs() {
@@ -690,7 +731,9 @@
       timeEl.textContent = fmtTime(t);
       updateSkip(t);
       save(false);
-      if (d.next && duration - t < 25 && upNext.hidden && !el._shown) { el._shown = true; startUpNext(); }
+      // "Up next" appears when the closing credits start (or 25 s before the end if unknown).
+      var creditsStart = d.credits && d.credits < duration ? d.credits : duration - 25;
+      if (d.next && t >= creditsStart && upNext.hidden && !el._shown) { el._shown = true; startUpNext(); }
     });
     video.addEventListener('play', function () { setPlayIcon('pause'); poke(); });
     video.addEventListener('pause', function () { setPlayIcon('play'); el.classList.remove('idle'); save(true); });
@@ -729,7 +772,7 @@
       poke();
     }
     document.addEventListener('keydown', onKey);
-    function onHide() { save(true); }
+    function onHide() { save(true, true); }
     window.addEventListener('pagehide', onHide);
     document.addEventListener('visibilitychange', onHide);
 
@@ -778,7 +821,7 @@
     var out;
     switch (name) {
       case 'watch': out = /^[0-9a-f]{20}$/.test(parts[1]) ? watchView(parts[1]) : homeView(); break;
-      case 'show': out = /^[0-9a-f]{16}$/.test(parts[1]) ? showView(parts[1]) : homeView(); break;
+      case 'show': out = /^[0-9a-f]{16}$/.test(parts[1]) ? loadProgress().then(function () { return showView(parts[1]); }) : homeView(); break;
       case 'movies': out = moviesView(); break;
       case 'series': out = seriesView(); break;
       case 'history': out = historyView(); break;

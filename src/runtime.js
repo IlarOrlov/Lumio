@@ -42,7 +42,7 @@ class Runtime {
     this.dataDir = resolveFromRoot(raw.dataDir || DEFAULTS.dataDir);
     this.db = openDb(this.dataDir);
     this.sessions = new Sessions(this.db, { sessionDays: raw.sessionDays || DEFAULTS.sessionDays });
-    this.progress = new Progress(this.db);
+    this.progress = new Progress(this.db, { creditsOf: (id) => (this.intros ? this.intros.creditsAt(id) : null) });
     this.limiter = new LoginLimiter();
     this.catalog = null;
     this.cfg = null;

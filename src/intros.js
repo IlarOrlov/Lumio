@@ -13,8 +13,13 @@
  *
  * The admin console can override any episode by hand ("manual"); manual
  * segments are never replaced by automatic detection. Fingerprints are cached
- * in the database, so re-detecting is quick. Work runs in the background at
- * low CPU priority, one ffmpeg at a time, yielding between comparisons so
+ * in the database, so re-detecting is quick.
+ *
+ * The same comparison over the last minutes finds the closing credits (a
+ * logo and credit roll that recur at the end of every episode). Their start
+ * is when an episode counts as watched, and when "Up next" appears.
+ *
+ * Work runs in the background at low CPU priority, one ffmpeg at a time, yielding between comparisons so
  * streaming stays smooth.
  */
 const os = require('node:os');
@@ -30,6 +35,8 @@ const MIN_LEN = 4;               // seconds
 const MAX_LEN = 150;             // seconds
 const MIN_SUPPORT = 2;           // must recur in at least 2 other episodes
 const MAX_SEGMENTS = 3;
+const TAIL_SECONDS = 300;        // look for closing credits in the last 5 minutes
+const CREDITS_NEAR_END = 20;     // credits run until (nearly) the end of the file
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS intro_fp (
@@ -37,6 +44,12 @@ CREATE TABLE IF NOT EXISTS intro_fp (
 );
 CREATE TABLE IF NOT EXISTS intros (
   media_id TEXT PRIMARY KEY, segments TEXT NOT NULL, source TEXT NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credits_fp (
+  media_id TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime INTEGER NOT NULL, start REAL NOT NULL, fp BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credits (
+  media_id TEXT PRIMARY KEY, start REAL, size INTEGER NOT NULL, mtime INTEGER NOT NULL, updated_at INTEGER NOT NULL
 );`;
 
 const pop = (x) => {
@@ -100,6 +113,21 @@ function segmentsFrom(matches) {
     .map(({ start, end }) => ({ start, end }));
 }
 
+/**
+ * Start of the closing credits, in seconds into the fingerprinted tail, from
+ * the tail's recurring segments: the segment that runs to (nearly) the end,
+ * extended back over directly adjoining recurring segments. null if none.
+ */
+function creditsFrom(matches, tailLen) {
+  const segs = segmentsFrom(matches);
+  let i = segs.length - 1;
+  while (i >= 0 && segs[i].end < tailLen - CREDITS_NEAR_END) i -= 1;
+  if (i < 0) return null;
+  let start = segs[i].start;
+  while (i > 0 && segs[i - 1].end >= start - 3) { i -= 1; start = segs[i].start; }
+  return start;
+}
+
 /** Validates/normalises segments from the admin console. */
 function cleanSegments(list, duration) {
   if (!Array.isArray(list) || list.length > MAX_SEGMENTS) throw Object.assign(new Error(`Up to ${MAX_SEGMENTS} segments per episode`), { status: 400 });
@@ -135,6 +163,10 @@ class IntroDetector {
       get: db.prepare('SELECT segments, source, updated_at FROM intros WHERE media_id = ?'),
       put: db.prepare('INSERT OR REPLACE INTO intros (media_id, segments, source, updated_at) VALUES (?, ?, ?, ?)'),
       del: db.prepare('DELETE FROM intros WHERE media_id = ?'),
+      getTailFp: db.prepare('SELECT size, mtime, start, fp FROM credits_fp WHERE media_id = ?'),
+      putTailFp: db.prepare('INSERT OR REPLACE INTO credits_fp (media_id, size, mtime, start, fp) VALUES (?, ?, ?, ?, ?)'),
+      getCredits: db.prepare('SELECT start, size, mtime FROM credits WHERE media_id = ?'),
+      putCredits: db.prepare('INSERT OR REPLACE INTO credits (media_id, start, size, mtime, updated_at) VALUES (?, ?, ?, ?, ?)'),
     };
   }
 
@@ -142,6 +174,18 @@ class IntroDetector {
   get(mediaId) {
     const row = this.q.get.get(mediaId);
     return row ? { segments: JSON.parse(row.segments), source: row.source, updatedAt: row.updated_at } : null;
+  }
+
+  /** Where the closing credits begin (seconds), or null when unknown. */
+  creditsAt(mediaId) {
+    const row = this.q.getCredits.get(mediaId);
+    return row && Number.isFinite(row.start) ? row.start : null;
+  }
+
+  /** True when the credits of this exact file (size/mtime) were looked for. */
+  creditsChecked(item) {
+    const row = this.q.getCredits.get(item.id);
+    return !!row && row.size === item.size && row.mtime === item.mtime;
   }
 
   setManual(item, segments) {
@@ -179,7 +223,7 @@ class IntroDetector {
     for (const k of keys) {
       const show = cat.shows.get(k);
       if (!show) continue;
-      const pending = force || show.episodes.some((e) => !this.q.get.get(e.id));
+      const pending = force || show.episodes.some((e) => !this.q.get.get(e.id) || !this.creditsChecked(e));
       if (!pending || (!force && k === this.currentKey)) continue; // already being checked
       if (force) this.force.add(k);
       if (!this.queue.includes(k)) this.queue.push(k);
@@ -226,6 +270,7 @@ class IntroDetector {
     const total = show.episodes.length;
     Object.assign(this.state, { phase: 'fingerprinting', show: show.name, done: 0, total });
     let found = 0;
+    let credited = 0;
     for (const eps of seasons.values()) {
       eps.sort((a, b) => a.episode - b.episode);
       const fps = [];
@@ -254,9 +299,58 @@ class IntroDetector {
         this.q.put.run(eps[i].id, JSON.stringify(segmentsFrom(matches[i])), 'auto', Date.now());
       }
       for (const ep of eps) { const r = this.get(ep.id); if (r && r.segments.length) found += 1; }
+      credited += await this.detectCredits(eps, { force });
       this.state.phase = 'fingerprinting';
     }
-    this.log.info?.(`intros: ${show.name}: skip segments found in ${found} of ${total} episodes`);
+    this.log.info?.(`intros: ${show.name}: skip segments found in ${found} of ${total} episodes, credits in ${credited}`);
+  }
+
+  /** Finds the closing credits of one season's episodes (cached per file). */
+  async detectCredits(eps, { force = false } = {}) {
+    if (!force && eps.every((e) => this.creditsChecked(e))) return eps.filter((e) => this.creditsAt(e.id) !== null).length;
+    const tails = [];
+    for (const ep of eps) {
+      if (this.cancelled) return 0;
+      tails.push(await this.tailFingerprint(ep));
+    }
+    const matches = eps.map(() => []);
+    for (let i = 0; i < eps.length; i++) {
+      for (let j = i + 1; j < eps.length && j - i <= NEIGHBOURS; j++) {
+        if (this.cancelled) return 0;
+        if (!tails[i] || !tails[j]) continue;
+        for (const r of matchRuns(tails[i].fp, tails[j].fp)) {
+          matches[i].push({ start: r.aStart, end: r.aEnd, other: j });
+          matches[j].push({ start: r.bStart, end: r.bEnd, other: i });
+        }
+        await yieldNow();
+      }
+    }
+    let n = 0;
+    for (let i = 0; i < eps.length; i++) {
+      const t = tails[i];
+      const rel = t ? creditsFrom(matches[i], t.fp.length * STEP) : null;
+      const start = rel === null ? null : round1(t.start + rel);
+      this.q.putCredits.run(eps[i].id, start, eps[i].size, eps[i].mtime, Date.now());
+      if (start !== null) n += 1;
+    }
+    return n;
+  }
+
+  /** Chromaprint of the last TAIL_SECONDS of audio; start = where the tail begins in the file. */
+  async tailFingerprint(item) {
+    const row = this.q.getTailFp.get(item.id);
+    if (row && row.size === item.size && row.mtime === item.mtime) {
+      const b = row.fp;
+      return { start: row.start, fp: new Uint32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)) };
+    }
+    const duration = (this.catalog().cachedProbe(item) || {}).duration;
+    if (!(duration > 60)) return null;
+    const start = Math.max(0, duration - TAIL_SECONDS);
+    const buf = await this.chromaprint(item, ['-ss', start.toFixed(3)], TAIL_SECONDS + 5);
+    if (!buf || buf.length < 4 * Math.ceil(MIN_LEN / STEP)) return null;
+    const usable = buf.subarray(0, buf.length - (buf.length % 4));
+    this.q.putTailFp.run(item.id, item.size, item.mtime, start, usable);
+    return { start, fp: new Uint32Array(usable.buffer.slice(usable.byteOffset, usable.byteOffset + usable.byteLength)) };
   }
 
   /** Chromaprint of the first SCAN_SECONDS of audio (cached by file size/mtime). */
@@ -266,9 +360,18 @@ class IntroDetector {
       const b = row.fp;
       return new Uint32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
     }
-    const buf = await new Promise((resolve, reject) => {
+    const buf = await this.chromaprint(item, [], SCAN_SECONDS);
+    if (!buf || buf.length < 4 * Math.ceil(MIN_LEN / STEP)) return null;
+    const usable = buf.subarray(0, buf.length - (buf.length % 4));
+    this.q.putFp.run(item.id, item.size, item.mtime, usable);
+    return new Uint32Array(usable.buffer.slice(usable.byteOffset, usable.byteOffset + usable.byteLength));
+  }
+
+  /** Raw Chromaprint values of `seconds` of the first audio track, starting at seekArgs. */
+  chromaprint(item, seekArgs, seconds) {
+    return new Promise((resolve, reject) => {
       const child = spawn('ffmpeg', [
-        '-hide_banner', '-nostdin', '-v', 'error', ...SAFE_INPUT, '-t', String(SCAN_SECONDS), '-i', asInput(item.path),
+        '-hide_banner', '-nostdin', '-v', 'error', ...SAFE_INPUT, ...seekArgs, '-t', String(seconds), '-i', asInput(item.path),
         '-map', '0:a:0', '-vn', '-sn', '-ac', '1', '-f', 'chromaprint', '-fp_format', 'raw', 'pipe:1',
       ], { stdio: ['ignore', 'pipe', 'ignore'] });
       this.child = child;
@@ -284,11 +387,7 @@ class IntroDetector {
         if (code === 0) resolve(Buffer.concat(out)); else resolve(null); // no audio / unreadable: skip this episode
       });
     });
-    if (!buf || buf.length < 4 * Math.ceil(MIN_LEN / STEP)) return null;
-    const usable = buf.subarray(0, buf.length - (buf.length % 4));
-    this.q.putFp.run(item.id, item.size, item.mtime, usable);
-    return new Uint32Array(usable.buffer.slice(usable.byteOffset, usable.byteOffset + usable.byteLength));
   }
 }
 
-module.exports = { IntroDetector, matchRuns, segmentsFrom, cleanSegments, STEP };
+module.exports = { IntroDetector, matchRuns, segmentsFrom, creditsFrom, cleanSegments, STEP };
