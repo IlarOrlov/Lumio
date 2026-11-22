@@ -1,4 +1,5 @@
 'use strict';
+const mkTmp = require('./tmp');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -87,8 +88,8 @@ test('filename parsing: movies and episodes', () => {
 });
 
 function makeLibrary() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-lib-'));
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-out-'));
+  const dir = mkTmp('lumio-lib-');
+  const outside = mkTmp('lumio-out-');
   fs.mkdirSync(path.join(dir, 'Show', 'Season 1'), { recursive: true });
   for (const f of ['Show/Season 1/Show S01E01.mkv', 'Show/Season 1/Show S01E02.mkv', 'Show/Season 1/Show S01E02.en.srt', 'Film (2020).mp4', 'notes.txt', '.hidden.mkv']) {
     fs.writeFileSync(path.join(dir, f), 'x');

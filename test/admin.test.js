@@ -1,12 +1,13 @@
 'use strict';
 // Admin console: access control and the first-run setup flow, against a
 // throw-away config/data directory (needs ffmpeg + openssl installed).
+const mkTmp = require('./tmp');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 
-const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-admin-'));
+const TMP = mkTmp('lumio-admin-');
 const MEDIA = path.join(TMP, 'media');
 fs.mkdirSync(MEDIA);
 process.env.LUMIO_CONFIG = path.join(TMP, 'lumio.json');

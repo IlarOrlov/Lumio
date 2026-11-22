@@ -1,6 +1,7 @@
 'use strict';
 // End-to-end HTTP tests of the request pipeline (auth, CSRF, guards, routing).
 // ffprobe is replaced with a stub so these run without ffmpeg installed.
+const mkTmp = require('./tmp');
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -16,7 +17,7 @@ const { createApp } = require('../src/app');
 const PASSWORD = 'a very long household password';
 
 async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'] } = {}) {
-  const lib = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-app-'));
+  const lib = mkTmp('lumio-app-');
   fs.writeFileSync(path.join(lib, 'Movie (2001).mp4'), Buffer.alloc(1000, 7));
   fs.writeFileSync(path.join(lib, 'Show S01E01.mkv'), 'x');
   const db = openDb(':memory:');
@@ -28,7 +29,7 @@ async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'] } = {}) {
   await catalog.probeAllInBackground();
   const cfg = {
     https: false, allowedNetworks, allowedHosts: [], sessionDays: 30, maxTranscodes: 1,
-    passwordHash: await hashPassword(PASSWORD), dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-data-')),
+    passwordHash: await hashPassword(PASSWORD), dataDir: mkTmp('lumio-data-'),
   };
   const sessions = new Sessions(db);
   const handler = createApp({
@@ -273,11 +274,11 @@ test('HTTP/2 over TLS (one connection for everything) and HTTP/1.1 fallback both
   const http2 = require('node:http2');
   const https = require('node:https');
   const { generateCert, caPaths } = require('../src/tls');
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-h2-'));
+  const dir = mkTmp('lumio-h2-');
   const certPath = path.join(dir, 'cert.pem'); const keyPath = path.join(dir, 'key.pem');
   generateCert(certPath, keyPath, ['lumio.local']);
   const db = openDb(':memory:');
-  const lib = fs.mkdtempSync(path.join(os.tmpdir(), 'lumio-lib-'));
+  const lib = mkTmp('lumio-lib-');
   const catalog = new Catalog(db, [lib], { probe: async () => ({ duration: 1, video: null, audio: [], subtitles: [] }), log: {} });
   catalog.rescan();
   const handler = createApp({
