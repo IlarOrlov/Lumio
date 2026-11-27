@@ -13,7 +13,9 @@ const { legacyCss } = require('./legacycss');
 const ID_RE = /^[0-9a-f]{20}$/;
 const SHOW_RE = /^[0-9a-f]{16}$/;
 const DEVICE_RE = /^[A-Za-z0-9_-]{16}$/;
-const ADMIN_ONLY = new Set(['/api/devices', '/api/devices/rename', '/api/devices/revoke', '/api/rescan', '/api/windows-helper']);
+const HOLD_MS = 120_000; // one open request per page; the page opens the next before this one ends
+const MAX_HOLDS = 64;
+const ADMIN_ONLY =new Set(['/api/devices', '/api/devices/rename', '/api/devices/revoke', '/api/rescan', '/api/windows-helper']);
 
 function cleanName(v) {
   // Device names are shown in the UI; strip control chars and cap the length.
@@ -37,6 +39,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
   const cookieName = cfg.https ? '__Host-lumio' : 'lumio';
   const active = { transcode: 0, remux: 0 };
   let diagTimes = [];
+  let holds = 0;
 
   function setSessionCookie(res, token, maxAgeSec) {
     const attrs = [`${cookieName}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', `Max-Age=${maxAgeSec}`];
@@ -211,6 +214,30 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
     return sendImage(res, file);
   }
 
+  // A request the page keeps open so its HTTP/2 connection is never idle. The LG
+  // TV's browser closes idle connections (no request in flight) after anywhere
+  // from seconds to a minute, PINGs notwithstanding, and refuses every new
+  // connection to a clicked-through certificate: progress saves then failed for
+  // the rest of the episode. HTTP/1.1 has no shared connection to protect.
+  function hold(req, res) {
+    if (req.httpVersionMajor !== 2 || holds >= MAX_HOLDS) {
+      res.writeHead(204, { 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    holds += 1;
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.write(' ');
+    const tick = setInterval(() => res.write(' '), 20_000);
+    const stop = setTimeout(() => res.end(), cfg.holdMs || HOLD_MS);
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true; holds -= 1; clearInterval(tick); clearTimeout(stop);
+    };
+    res.on('finish', finish);
+    res.on('close', finish);
+  }
+
   // ---------- router ----------
 
   async function route(req, res, url, session) {
@@ -280,6 +307,7 @@ function createApp({ cfg, catalog, sessions, progress, limiter, log = console, h
       setSessionCookie(res, '', 0);
       return sendJson(res, 200, { ok: true });
     }
+    if (m === 'GET' && p === '/api/hold') return hold(req, res);
     if (m === 'GET' && p === '/api/library') return sendJson(res, 200, libraryView());
     if (m === 'GET' && p === '/api/progress') {
       return sendJson(res, 200, {

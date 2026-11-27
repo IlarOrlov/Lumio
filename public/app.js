@@ -180,6 +180,59 @@
 
   // ---------- data ----------
 
+  // Keep one request open on the page's connection at all times (see /api/hold
+  // on the server): the LG TV browser closes connections it sees as idle and
+  // then refuses to reconnect to a clicked-through certificate until the page
+  // is reloaded. Each hold lasts 120 s; the next one opens at 100 s.
+  function keepConnection() {
+    function open() {
+      var x = new XMLHttpRequest();
+      var chained = false;
+      var timer = setTimeout(function () { chained = true; open(); }, 100000);
+      function chain(ms) {
+        if (chained) return;
+        chained = true; clearTimeout(timer); setTimeout(open, ms);
+      }
+      x.open('GET', '/api/hold', true);
+      x.onload = function () {
+        // 204: nothing to hold (HTTP/1.1 or server busy); 401: signed out
+        if (x.status === 204 || x.status === 401) { chained = true; clearTimeout(timer); return; }
+        chain(1000); // ended early (server restarted): open the next one
+      };
+      x.onerror = function () { chain(30000); };
+      try { x.send(); } catch (e) { chain(30000); }
+    }
+    open();
+  }
+
+  // Progress the server never received (the connection was lost) waits in
+  // localStorage and is sent the next time Lumio loads.
+  var UNSENT = 'lumio-unsent';
+  function readUnsent() {
+    try { return JSON.parse(localStorage.getItem(UNSENT) || '{}') || {}; } catch (e) { return {}; }
+  }
+  function writeUnsent(map) {
+    try {
+      if (Object.keys(map).length) localStorage.setItem(UNSENT, JSON.stringify(map));
+      else localStorage.removeItem(UNSENT);
+    } catch (e) { /* storage blocked or full */ }
+  }
+  function markUnsent(body) { var m = readUnsent(); m[body.id] = { body: body, t: Date.now() }; writeUnsent(m); }
+  function markSent(body) {
+    var m = readUnsent();
+    if (m[body.id] && m[body.id].body.position === body.position) { delete m[body.id]; writeUnsent(m); }
+  }
+  function flushUnsent() {
+    var m = readUnsent();
+    return Promise.all(Object.keys(m).map(function (id) {
+      var e = m[id];
+      if (!e || !e.body || Date.now() - e.t > 14 * 86400000) { // too old or malformed: give up on it
+        var cur = readUnsent(); delete cur[id]; writeUnsent(cur); return null;
+      }
+      return api('/api/progress', e.body).then(function () { markSent(e.body); }, function () { /* try again next load */ });
+    }));
+  }
+
   function loadProgress() {
     return api('/api/progress').then(function (p) {
       var map = {};
@@ -647,6 +700,9 @@
     var saveFails = 0;
     function postProgress(body, onOk, closing) {
       var json = JSON.stringify(body);
+      markUnsent(body);
+      var ok = onOk;
+      onOk = function (res) { markSent(body); ok(res); };
       function fail(why) {
         saveFails += 1;
         if ((saveFails === 1 || saveFails === 20) && window.LumioReport) window.LumioReport('progress save failed (' + saveFails + '): ' + why);
@@ -681,13 +737,18 @@
     }
 
     function save(force, closing) {
+      // After destroy() the video is emptied: its late pause/timeupdate events
+      // read 0:00 and once overwrote the real position with 0.
+      if (destroyed) return;
       var pos = now();
-      if (!duration || (!force && Math.abs(pos - lastSaved) < 5)) return;
+      if (!duration ||(!force && Math.abs(pos - lastSaved) < 5)) return;
       lastSaved = pos;
+      // this page's own view of the progress updates even if the save can't reach Lumio
+      var m = state.progress.map[d.id] || {};
+      m.id = d.id; m.position = pos; m.duration = duration;
+      state.progress.map[d.id] = m;
       postProgress({ id: d.id, position: pos, duration: duration }, function (res) {
-        var m = state.progress.map[d.id] || {};
-        m.id = d.id; m.position = pos; m.duration = duration; m.completed = m.completed || !!(res && res.completed);
-        state.progress.map[d.id] = m;
+        m.completed = m.completed || !!(res && res.completed);
       }, closing);
     }
 
@@ -791,8 +852,8 @@
     return {
       el: el,
       destroy: function () {
+        save(true); // the last real position, before the video is emptied
         destroyed = true;
-        save(true);
         clearInterval(el._timer);
         clearTimeout(hideTimer);
         document.removeEventListener('keydown', onKey);
@@ -877,7 +938,8 @@
       var nav = document.querySelector('[data-nav="settings"]');
       if (nav) nav.remove();
     }
-    return loadAll();
+    keepConnection();
+    return flushUnsent().then(loadAll);
   }).then(render).catch(function (e) {
     if (e && e.message === 'signed out') return;
     if (window.LumioFail) window.LumioFail('loading the library', e);

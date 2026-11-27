@@ -16,7 +16,7 @@ const { createApp } = require('../src/app');
 
 const PASSWORD = 'a very long household password';
 
-async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'] } = {}) {
+async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'], extraCfg = {} } = {}) {
   const lib = mkTmp('lumio-app-');
   fs.writeFileSync(path.join(lib, 'Movie (2001).mp4'), Buffer.alloc(1000, 7));
   fs.writeFileSync(path.join(lib, 'Show S01E01.mkv'), 'x');
@@ -29,7 +29,7 @@ async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'] } = {}) {
   await catalog.probeAllInBackground();
   const cfg = {
     https: false, allowedNetworks, allowedHosts: [], sessionDays: 30, maxTranscodes: 1,
-    passwordHash: await hashPassword(PASSWORD), dataDir: mkTmp('lumio-data-'),
+    passwordHash: await hashPassword(PASSWORD), dataDir: mkTmp('lumio-data-'), ...extraCfg,
   };
   const sessions = new Sessions(db);
   const handler = createApp({
@@ -39,7 +39,7 @@ async function setup({ allowedNetworks = ['127.0.0.0/8', '::1/128'] } = {}) {
   const server = http.createServer(handler);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  return { server, base, catalog, sessions };
+  return { server, base, catalog, sessions, handler };
 }
 
 async function req(base, p, { method = 'GET', body, cookie, csrf, headers = {} } = {}) {
@@ -313,4 +313,35 @@ test('HTTP/2 over TLS (one connection for everything) and HTTP/1.1 fallback both
   }));
   assert.equal(h1.status, 200, 'HTTP/1.1 clients still work');
   assert.ok(h1.alpn === 'http/1.1' || h1.alpn === false);
+});
+
+test('/api/hold keeps one request open on an HTTP/2 connection so TV browsers never see it idle', async (t) => {
+  const http2 = require('node:http2');
+  const { server, base, handler } = await setup({ extraCfg: { holdMs: 400 } });
+  t.after(() => server.close());
+  const a = await login(base);
+
+  // HTTP/1.1: nothing to hold (no shared connection), answered at once.
+  const h1 = await req(base, '/api/hold', { cookie: a.cookie });
+  assert.equal(h1.status, 204);
+  assert.equal((await req(base, '/api/hold')).status, 401, 'needs a signed-in device');
+
+  // HTTP/2: the response starts at once, stays open, then ends by itself.
+  const h2 = http2.createServer(handler);
+  await new Promise((r) => h2.listen(0, '127.0.0.1', r));
+  t.after(() => h2.close());
+  const client = http2.connect(`http://127.0.0.1:${h2.address().port}`);
+  t.after(() => client.close());
+  const started = Date.now();
+  const result = await new Promise((resolve, reject) => {
+    const s = client.request({ ':path': '/api/hold', cookie: a.cookie });
+    let status; let headersAt = 0;
+    s.on('response', (h) => { status = h[':status']; headersAt = Date.now() - started; });
+    s.resume();
+    s.on('end', () => resolve({ status, headersAt, endedAt: Date.now() - started }));
+    s.on('error', reject);
+  });
+  assert.equal(result.status, 200);
+  assert.ok(result.headersAt < 300, 'response headers arrive immediately');
+  assert.ok(result.endedAt >= 350, `stays open for the hold time (ended after ${result.endedAt} ms)`);
 });
